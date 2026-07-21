@@ -4,6 +4,19 @@
 
 > **Fork notice:** This fork replaces Segra's cloud (segra.tv accounts and upload hosting) with a self-hosted **[Zipline](https://github.com/diced/zipline)** server. Log in under Settings → Account with your Zipline URL and either your username/password or an API token; uploads go to `POST /api/upload` on your server and share links point at your Zipline instance.
 
+## 🚀 Quick Start
+
+1. Download the latest build from the [Releases](https://github.com/AleksAlfi/Segra-Zipline/releases) page and extract/install it.
+2. Open **Settings → Account**. Builds distributed with baked-in defaults already have the server URL filled in — otherwise enter your Zipline server URL.
+3. Log in with your Zipline username/password, or paste an API token (Zipline dashboard → Settings → API Token).
+4. Record, clip, hit upload — the share link lands on your clipboard via the link button on the clip card.
+
+To build a copy pre-configured for your own server:
+
+```bash
+./build-local.sh --url zipline.example.com --clipurl clip.example.com
+```
+
 ### ✂️ Clip Editor
 
 ![image](https://github.com/user-attachments/assets/beed0524-35f1-48be-9dd8-c2455959d2f9)
