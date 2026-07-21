@@ -9,17 +9,17 @@ cd "$SCRIPT_DIR"
 # --url        prefills the Zipline server URL on the login screen
 # --clipurl    sets the default share domain (x-zipline-domain) for uploads
 # --installer  additionally packs a Velopack setup exe into releases-out/
-# --version X  version for the installer package (default 2.0.0); must increase
-#              on each release for auto-updates to trigger.
-#              IMPORTANT: keep it >= 2.0.0. The OBS download manifest
-#              (segra.tv/api/obs/versions) gates OBS versions by Segra version;
-#              e.g. OBS 32.x requires >= 1.6.0-beta.6 — a lower version would
-#              silently install an outdated OBS.
+# --version X  version for the installer package. Defaults to upstream's
+#              (Segergren/Segra) latest release version, so the OBS download
+#              manifest (segra.tv/api/obs/versions) — which gates OBS versions
+#              by Segra version — selects exactly what stock Segra gets.
+#              Pass it explicitly for a fork-only re-release (bump the patch
+#              past upstream); versions must increase for auto-updates.
 # Without these flags the build is generic, same as the release builds.
 URL=""
 CLIPURL=""
 INSTALLER=false
-VERSION="2.0.0"
+VERSION=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --url) URL="$2"; shift 2 ;;
@@ -33,6 +33,18 @@ done
 EXTRA_PROPS=()
 [[ -n "$URL" ]] && EXTRA_PROPS+=("-p:ZiplineDefaultUrl=$URL")
 [[ -n "$CLIPURL" ]] && EXTRA_PROPS+=("-p:ZiplineDefaultClipDomain=$CLIPURL")
+
+if $INSTALLER && [[ -z "$VERSION" ]]; then
+  echo "=== Resolving version from upstream latest release ==="
+  VERSION=$(curl -fsSL https://api.github.com/repos/Segergren/Segra/releases/latest 2>/dev/null \
+    | sed -n 's/.*"tag_name": *"v\{0,1\}\([^"]*\)".*/\1/p' | head -1)
+  if [[ -z "$VERSION" ]]; then
+    echo "Could not resolve the upstream version (offline or GitHub rate-limited)." >&2
+    echo "Pass --version X.Y.Z explicitly and retry." >&2
+    exit 1
+  fi
+  echo "Mimicking upstream version: $VERSION"
+fi
 
 if $INSTALLER; then
   # The frontend bakes package.json's version into __APP_VERSION__, and the backend reports
