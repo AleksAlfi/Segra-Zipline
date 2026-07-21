@@ -9,13 +9,17 @@ cd "$SCRIPT_DIR"
 # --url        prefills the Zipline server URL on the login screen
 # --clipurl    sets the default share domain (x-zipline-domain) for uploads
 # --installer  additionally packs a Velopack setup exe into releases-out/
-# --version X  version for the installer package (default 1.0.0); must increase
-#              on each release for auto-updates to trigger
+# --version X  version for the installer package (default 2.0.0); must increase
+#              on each release for auto-updates to trigger.
+#              IMPORTANT: keep it >= 2.0.0. The OBS download manifest
+#              (segra.tv/api/obs/versions) gates OBS versions by Segra version;
+#              e.g. OBS 32.x requires >= 1.6.0-beta.6 — a lower version would
+#              silently install an outdated OBS.
 # Without these flags the build is generic, same as the release builds.
 URL=""
 CLIPURL=""
 INSTALLER=false
-VERSION="1.0.0"
+VERSION="2.0.0"
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --url) URL="$2"; shift 2 ;;
