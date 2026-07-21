@@ -362,3 +362,4 @@ MigrationBackup/
 .playwright-mcp/
 
 releases-out/
+private-builds/
