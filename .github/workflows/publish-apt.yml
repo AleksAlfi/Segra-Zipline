@@ -34,6 +34,8 @@ on:
 
 jobs:
   publish:
+    # Upstream-only: needs Segergren/Segra's apt GPG signing key and hosting.
+    if: github.repository == 'Segergren/Segra'
     runs-on: ubuntu-latest
     permissions:
       contents: write # push to gh-pages
