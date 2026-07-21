@@ -30,6 +30,18 @@ EXTRA_PROPS=()
 [[ -n "$URL" ]] && EXTRA_PROPS+=("-p:ZiplineDefaultUrl=$URL")
 [[ -n "$CLIPURL" ]] && EXTRA_PROPS+=("-p:ZiplineDefaultClipDomain=$CLIPURL")
 
+if $INSTALLER; then
+  # The frontend bakes package.json's version into __APP_VERSION__, and the backend reports
+  # the Velopack install version. They must match, or the frontend reloads on every connect.
+  echo "=== Stamping frontend version $VERSION ==="
+  cp Frontend/package.json Frontend/package.json.bak
+  restore_pkg() {
+    [[ -f Frontend/package.json.bak ]] && mv -f Frontend/package.json.bak Frontend/package.json
+  }
+  trap restore_pkg EXIT
+  node -e "const fs=require('fs');const p='Frontend/package.json';const j=JSON.parse(fs.readFileSync(p));j.version='$VERSION';fs.writeFileSync(p,JSON.stringify(j,null,2)+'\n')"
+fi
+
 echo "=== Building Frontend ==="
 (cd Frontend && npm run build)
 
