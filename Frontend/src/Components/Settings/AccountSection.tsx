@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { TriangleAlert, LogOut, Ellipsis, KeyRound, Lock, ShieldCheck } from 'lucide-react';
 import { useAuth } from '../../Hooks/useAuth';
 import { useSettings, useSettingsUpdater } from '../../Context/SettingsContext';
@@ -10,6 +10,7 @@ export default function AccountSection() {
   const {
     user,
     serverUrl,
+    defaultServerUrl,
     isAuthenticated,
     isAuthenticating,
     authError,
@@ -36,6 +37,15 @@ export default function AccountSection() {
   // Keep drafts in sync when settings arrive from the backend
   useEffect(() => setFolderDraft(ziplineFolder), [ziplineFolder]);
   useEffect(() => setDomainDraft(ziplineDomain), [ziplineDomain]);
+
+  // Prefill the server URL once from the build's baked-in default (if any)
+  const prefilledServerRef = useRef(false);
+  useEffect(() => {
+    if (!prefilledServerRef.current && defaultServerUrl && !server) {
+      prefilledServerRef.current = true;
+      setServer(defaultServerUrl);
+    }
+  }, [defaultServerUrl, server]);
 
   const commitUploadOptions = () => {
     const folder = folderDraft.trim();

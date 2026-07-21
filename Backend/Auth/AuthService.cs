@@ -226,7 +226,9 @@ namespace Segra.Backend.Auth
                 username = Auth.Username,
                 avatar = _avatar,
                 error,
-                totpRequired
+                totpRequired,
+                // Baked-in default from the build (see BuildConfig); prefills the login form
+                defaultServerUrl = Core.BuildConfig.DefaultServerUrl
             });
         }
 

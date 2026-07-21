@@ -17,6 +17,7 @@ export interface ZiplineUser {
 interface AuthContextType {
   user: ZiplineUser | null;
   serverUrl: string | null;
+  defaultServerUrl: string | null; // Baked into the exe at build time; prefills the login form
   isAuthenticated: boolean;
   authError: string | null;
   totpRequired: boolean;
@@ -34,6 +35,7 @@ interface AuthStateMessage {
   avatar?: string | null;
   error?: string | null;
   totpRequired?: boolean;
+  defaultServerUrl?: string | null;
 }
 
 const AuthContext = createContext<AuthContextType | null>(null);
@@ -50,6 +52,7 @@ export function onSignOut(cb: () => void) {
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<ZiplineUser | null>(null);
   const [serverUrl, setServerUrl] = useState<string | null>(null);
+  const [defaultServerUrl, setDefaultServerUrl] = useState<string | null>(null);
   const [authError, setAuthError] = useState<string | null>(null);
   const [totpRequired, setTotpRequired] = useState(false);
   const [isAuthenticating, setIsAuthenticating] = useState(false);
@@ -79,6 +82,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setIsAuthenticating(false);
       setTotpRequired(!!state.totpRequired);
       setAuthError(state.error ?? null);
+      setDefaultServerUrl(state.defaultServerUrl || null);
 
       if (state.authenticated) {
         setUser({ username: state.username ?? '', avatar: state.avatar ?? null });
@@ -137,6 +141,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const value: AuthContextType = {
     user,
     serverUrl,
+    defaultServerUrl,
     isAuthenticated: user !== null,
     authError,
     totpRequired,

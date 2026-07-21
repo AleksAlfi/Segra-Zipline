@@ -37,7 +37,18 @@
          AssemblyInfo.cs sits under this project folder and would otherwise be globbed into
          this compilation, leaking a duplicate AssemblyVersion (and masking the real version). -->
     <DefaultItemExcludes>$(DefaultItemExcludes);Inspector\**</DefaultItemExcludes>
+
+    <!-- Optional deployment defaults baked into the exe, read at runtime by BuildConfig.
+         Pass -p:ZiplineDefaultUrl=... -p:ZiplineDefaultClipDomain=... (or the url/clipurl
+         flags of build-local.sh). Empty in normal builds. -->
+    <ZiplineDefaultUrl Condition="'$(ZiplineDefaultUrl)' == ''"></ZiplineDefaultUrl>
+    <ZiplineDefaultClipDomain Condition="'$(ZiplineDefaultClipDomain)' == ''"></ZiplineDefaultClipDomain>
   </PropertyGroup>
+
+  <ItemGroup>
+    <AssemblyMetadata Include="ZiplineDefaultUrl" Value="$(ZiplineDefaultUrl)" />
+    <AssemblyMetadata Include="ZiplineDefaultClipDomain" Value="$(ZiplineDefaultClipDomain)" />
+  </ItemGroup>
 
   <ItemGroup>
     <PackageReference Include="Microsoft.Extensions.FileProviders.Embedded" Version="10.0.10" />
