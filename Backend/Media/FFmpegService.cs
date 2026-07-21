@@ -50,7 +50,7 @@ namespace Segra.Backend.Media
         public const int AVERROR_HTTP_SERVER_ERROR = -(0xF8 | ('5' << 8) | ('X' << 16) | ('X' << 24));
 
         private const string BugReportSuffix =
-            "\n\nThis is likely a bug. Please report it on our Discord or on GitHub:\nhttps://github.com/Segergren/Segra/issues";
+            "\n\nThis is likely a bug. Please report it on GitHub:\nhttps://github.com/AleksAlfi/Segra-Zipline/issues";
 
         public static (string Message, bool LikelyBug) Describe(int exitCode)
         {
