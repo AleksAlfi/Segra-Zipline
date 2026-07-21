@@ -1,73 +1,63 @@
-import React, { useEffect, useState } from 'react';
-import { TriangleAlert, LogOut, Ellipsis, Mail, History } from 'lucide-react';
-import { DiscordIcon } from '../icons/BrandIcons';
+import React, { useState } from 'react';
+import { TriangleAlert, LogOut, Ellipsis, KeyRound, Lock, ShieldCheck } from 'lucide-react';
 import { useAuth } from '../../Hooks/useAuth';
-import { useProfile } from '../../Hooks/useUserProfile';
 import Button from '../Button';
 
-type AuthTab = 'login' | 'register';
+type AuthTab = 'password' | 'token';
 
 export default function AccountSection() {
   const {
     user,
-    session,
+    serverUrl,
+    isAuthenticated,
     isAuthenticating,
     authError,
+    totpRequired,
     clearAuthError,
-    login,
-    register,
-    loginWithDiscord,
+    loginWithPassword,
+    loginWithToken,
     signOut,
   } = useAuth();
-  const { data: profile, error: profileError } = useProfile();
   const [error, setError] = useState('');
-  const [email, setEmail] = useState('');
+  const [server, setServer] = useState(() => localStorage.getItem('ziplineServerUrl') || '');
+  const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
-  const [confirmPassword, setConfirmPassword] = useState('');
-  const [tab, setTab] = useState<AuthTab>('login');
-  const [confirmEmailMessage, setConfirmEmailMessage] = useState('');
-  const [lastUsedMethod, setLastUsedMethod] = useState<'discord' | 'email' | null>(null);
+  const [code, setCode] = useState('');
+  const [apiToken, setApiToken] = useState('');
+  const [tab, setTab] = useState<AuthTab>(() =>
+    localStorage.getItem('ziplineLoginMethod') === 'token' ? 'token' : 'password',
+  );
 
-  useEffect(() => {
-    const lastMethod = localStorage.getItem('lastLoginMethod') as 'discord' | 'email' | null;
-    setLastUsedMethod(lastMethod);
-  }, []);
-
-  const handleDiscordLogin = () => {
-    setError('');
-    clearAuthError();
-    localStorage.setItem('lastLoginMethod', 'discord');
-    loginWithDiscord();
+  const validateServer = () => {
+    if (!server.trim()) {
+      setError('Enter your Zipline server URL');
+      return false;
+    }
+    return true;
   };
 
-  const handleEmailLogin = async (e: React.FormEvent) => {
+  const handlePasswordLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
     clearAuthError();
-    localStorage.setItem('lastLoginMethod', 'email');
-    await login(email, password);
+    if (!validateServer()) return;
+    localStorage.setItem('ziplineServerUrl', server.trim());
+    localStorage.setItem('ziplineLoginMethod', 'password');
+    loginWithPassword(server.trim(), username, password, code.trim() || undefined);
   };
 
-  const handleRegister = async (e: React.FormEvent) => {
+  const handleTokenLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
     clearAuthError();
-    setConfirmEmailMessage('');
-
-    if (password !== confirmPassword) {
-      setError('Passwords do not match');
+    if (!validateServer()) return;
+    if (!apiToken.trim()) {
+      setError('Enter your Zipline API token');
       return;
     }
-
-    if (password.length < 6) {
-      setError('Password must be at least 6 characters');
-      return;
-    }
-
-    const result = await register(email, password);
-    if (result?.confirmEmail) {
-      setConfirmEmailMessage('Check your email to confirm your account, then log in.');
-    }
+    localStorage.setItem('ziplineServerUrl', server.trim());
+    localStorage.setItem('ziplineLoginMethod', 'token');
+    loginWithToken(server.trim(), apiToken.trim());
   };
 
   const handleLogout = async () => {
@@ -76,7 +66,7 @@ export default function AccountSection() {
 
   const displayError = error || authError;
 
-  if (!session) {
+  if (!isAuthenticated) {
     return (
       <div className="p-4 bg-base-300 rounded-lg shadow-md border border-custom space-y-4">
         {displayError && (
@@ -86,72 +76,55 @@ export default function AccountSection() {
           </div>
         )}
 
-        {confirmEmailMessage && (
-          <div className="alert alert-success" role="alert">
-            <span>{confirmEmailMessage}</span>
-          </div>
-        )}
-
         <div className="space-y-4">
-          <div className="relative">
-            {lastUsedMethod === 'discord' && (
-              <div
-                className={`absolute -top-3 right-2 bg-base-300 px-2 py-0.5 rounded-full border border-custom shadow-sm transition-all duration-300 ${isAuthenticating ? 'opacity-0 scale-75' : 'opacity-100 scale-100'}`}
-              >
-                <div className="flex items-center gap-1 text-xs font-medium text-yellow-400">
-                  <History className="w-3 h-3" />
-                  Last used
-                </div>
-              </div>
-            )}
-            <Button
-              variant="primary"
-              className="w-full gap-2 font-semibold text-white border-custom hover:border-custom"
-              onClick={handleDiscordLogin}
-              loading={isAuthenticating}
-            >
-              <DiscordIcon className="w-5 h-5" />
-              {isAuthenticating ? 'Connecting...' : 'Continue with Discord'}
-            </Button>
+          <div className="form-control">
+            <div className="mb-2">Zipline Server URL</div>
+            <input
+              type="url"
+              value={server}
+              onChange={(e) => setServer(e.target.value)}
+              className="input input-bordered bg-base-200 w-full"
+              disabled={isAuthenticating}
+              placeholder="https://zipline.example.com"
+              required
+            />
           </div>
-
-          <div className="divider">Or Use Email</div>
 
           {/* Tab toggle */}
           <div className="tabs tabs-boxed justify-center">
             <button
-              className={`tab ${tab === 'login' ? 'tab-active' : ''}`}
+              className={`tab ${tab === 'password' ? 'tab-active' : ''}`}
               onClick={() => {
-                setTab('login');
+                setTab('password');
                 setError('');
-                setConfirmEmailMessage('');
+                clearAuthError();
               }}
             >
-              Login
+              Password
             </button>
             <button
-              className={`tab ${tab === 'register' ? 'tab-active' : ''}`}
+              className={`tab ${tab === 'token' ? 'tab-active' : ''}`}
               onClick={() => {
-                setTab('register');
+                setTab('token');
                 setError('');
-                setConfirmEmailMessage('');
+                clearAuthError();
               }}
             >
-              Register
+              API Token
             </button>
           </div>
 
-          {tab === 'login' ? (
-            <form onSubmit={handleEmailLogin} className="space-y-4">
+          {tab === 'password' ? (
+            <form onSubmit={handlePasswordLogin} className="space-y-4">
               <div className="form-control">
-                <div className="mb-2">Email</div>
+                <div className="mb-2">Username</div>
                 <input
-                  type="email"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
+                  type="text"
+                  value={username}
+                  onChange={(e) => setUsername(e.target.value)}
                   className="input input-bordered bg-base-200 w-full"
                   disabled={isAuthenticating}
-                  placeholder="example@example.com"
+                  placeholder="username"
                   required
                 />
               </div>
@@ -169,67 +142,51 @@ export default function AccountSection() {
                 />
               </div>
 
-              <div className="relative">
-                {lastUsedMethod === 'email' && (
-                  <div
-                    className={`absolute -top-3 right-2 bg-base-300 px-2 py-0.5 rounded-full border border-custom shadow-sm transition-all duration-300 ${isAuthenticating ? 'opacity-0 scale-75' : 'opacity-100 scale-100'}`}
-                  >
-                    <div className="flex items-center gap-1 text-xs font-medium text-yellow-400">
-                      <History className="w-3 h-3" />
-                      Last used
-                    </div>
+              {totpRequired && (
+                <div className="form-control">
+                  <div className="mb-2 flex items-center gap-1">
+                    <ShieldCheck className="w-4 h-4" />
+                    Two-Factor Code
                   </div>
-                )}
-                <Button
-                  type="submit"
-                  variant="primary"
-                  className="w-full font-semibold text-white border-custom hover:border-custom"
-                  loading={isAuthenticating}
-                >
-                  <Mail size={20} />
-                  Sign In with Email
-                </Button>
-              </div>
+                  <input
+                    type="text"
+                    inputMode="numeric"
+                    value={code}
+                    onChange={(e) => setCode(e.target.value)}
+                    className="input input-bordered bg-base-200 w-full"
+                    disabled={isAuthenticating}
+                    placeholder="123456"
+                    autoFocus
+                  />
+                </div>
+              )}
+
+              <Button
+                type="submit"
+                variant="primary"
+                className="w-full font-semibold text-white border-custom hover:border-custom"
+                loading={isAuthenticating}
+              >
+                <Lock size={20} />
+                Connect to Zipline
+              </Button>
             </form>
           ) : (
-            <form onSubmit={handleRegister} className="space-y-4">
+            <form onSubmit={handleTokenLogin} className="space-y-4">
               <div className="form-control">
-                <div className="mb-2">Email</div>
-                <input
-                  type="email"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  className="input input-bordered bg-base-200 w-full"
-                  disabled={isAuthenticating}
-                  placeholder="example@example.com"
-                  required
-                />
-              </div>
-
-              <div className="form-control">
-                <div className="mb-2">Password</div>
+                <div className="mb-2">API Token</div>
                 <input
                   type="password"
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
+                  value={apiToken}
+                  onChange={(e) => setApiToken(e.target.value)}
                   className="input input-bordered bg-base-200 w-full"
                   disabled={isAuthenticating}
-                  placeholder="********"
+                  placeholder="Paste your API token"
                   required
                 />
-              </div>
-
-              <div className="form-control">
-                <div className="mb-2">Confirm Password</div>
-                <input
-                  type="password"
-                  value={confirmPassword}
-                  onChange={(e) => setConfirmPassword(e.target.value)}
-                  className="input input-bordered bg-base-200 w-full"
-                  disabled={isAuthenticating}
-                  placeholder="********"
-                  required
-                />
+                <div className="text-xs opacity-60 mt-2">
+                  Found in your Zipline dashboard under Settings → API Token
+                </div>
               </div>
 
               <Button
@@ -238,8 +195,8 @@ export default function AccountSection() {
                 className="w-full font-semibold text-white border-custom hover:border-custom"
                 loading={isAuthenticating}
               >
-                <Mail size={20} />
-                Create Account
+                <KeyRound size={20} />
+                Connect to Zipline
               </Button>
             </form>
           )}
@@ -255,10 +212,10 @@ export default function AccountSection() {
           {/* Avatar Container */}
           <div className="relative w-16 h-16">
             <div className="w-full h-full rounded-full overflow-hidden bg-base-200 ring-2 ring-base-300">
-              {profile?.avatar_url ? (
+              {user?.avatar ? (
                 <img
-                  src={profile.avatar_url}
-                  alt={`${profile.username}'s avatar`}
+                  src={user.avatar}
+                  alt={`${user.username}'s avatar`}
                   className="w-full h-full object-cover"
                   onError={(e) => {
                     (e.target as HTMLImageElement).src = '/default-avatar.png';
@@ -269,7 +226,9 @@ export default function AccountSection() {
                   className="w-full h-full bg-base-300 flex items-center justify-center"
                   aria-hidden="true"
                 >
-                  <span className="text-2xl"></span>
+                  <span className="text-2xl font-bold uppercase">
+                    {user?.username?.charAt(0) || '?'}
+                  </span>
                 </div>
               )}
             </div>
@@ -277,14 +236,8 @@ export default function AccountSection() {
 
           {/* Profile Info */}
           <div className="min-w-0 flex-1">
-            <h3 className="font-bold truncate">
-              {profile?.username && !profile.username.startsWith('user_') ? (
-                profile.username
-              ) : (
-                <div className="skeleton h-[24px] w-24"></div>
-              )}
-            </h3>
-            <p className="text-sm opacity-70 truncate">{user?.email || 'Authenticated User'}</p>
+            <h3 className="font-bold truncate">{user?.username}</h3>
+            <p className="text-sm opacity-70 truncate">{serverUrl}</p>
           </div>
 
           {/* More Options Dropdown */}
@@ -315,17 +268,6 @@ export default function AccountSection() {
           </div>
         </div>
       </div>
-
-      {/* Error State */}
-      {profileError && (
-        <div className="alert alert-error mt-3" role="alert" aria-live="assertive">
-          <TriangleAlert className="w-5 h-5" />
-          <div>
-            <h3 className="font-bold">Profile load failed!</h3>
-            <div className="text-xs">{profileError.message || 'Unknown error occurred'}</div>
-          </div>
-        </div>
-      )}
     </div>
   );
 }

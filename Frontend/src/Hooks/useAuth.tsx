@@ -7,30 +7,33 @@ import {
   useCallback,
   ReactNode,
 } from 'react';
-import { api } from '../lib/api';
 import { sendMessageToBackend } from '../Utils/MessageUtils';
 
-interface AuthUser {
-  id: string;
-  email: string;
-  user_metadata?: Record<string, unknown>;
-}
-
-interface AuthSession {
-  access_token: string;
-  refresh_token: string;
+export interface ZiplineUser {
+  username: string;
+  avatar: string | null;
 }
 
 interface AuthContextType {
-  user: AuthUser | null;
-  session: AuthSession | null;
+  user: ZiplineUser | null;
+  serverUrl: string | null;
+  isAuthenticated: boolean;
   authError: string | null;
+  totpRequired: boolean;
   isAuthenticating: boolean;
   clearAuthError: () => void;
-  login: (email: string, password: string) => Promise<void>;
-  register: (email: string, password: string) => Promise<{ confirmEmail?: boolean }>;
-  loginWithDiscord: () => void;
+  loginWithPassword: (serverUrl: string, username: string, password: string, code?: string) => void;
+  loginWithToken: (serverUrl: string, apiToken: string) => void;
   signOut: () => void;
+}
+
+interface AuthStateMessage {
+  authenticated: boolean;
+  serverUrl?: string | null;
+  username?: string | null;
+  avatar?: string | null;
+  error?: string | null;
+  totpRequired?: boolean;
 }
 
 const AuthContext = createContext<AuthContextType | null>(null);
@@ -41,255 +44,107 @@ export function onSignOut(cb: () => void) {
   signOutCallbacks.push(cb);
 }
 
-function parseJwt(token: string): Record<string, unknown> | null {
-  try {
-    const payload = token.split('.')[1];
-    const json = atob(payload.replace(/-/g, '+').replace(/_/g, '/'));
-    return JSON.parse(json);
-  } catch {
-    return null;
-  }
-}
-
-function getJwtExp(token: string): number {
-  return (parseJwt(token)?.exp as number) ?? 0;
-}
-
-function getUserFromJwt(token: string): AuthUser | null {
-  const data = parseJwt(token);
-  if (!data?.sub) return null;
-  return { id: data.sub as string, email: (data.email as string) ?? '' };
-}
-
-function migrateOldSupabaseSession(): AuthSession | null {
-  try {
-    const raw = localStorage.getItem('sb-supabase-auth-token');
-    if (!raw) return null;
-    const data = JSON.parse(raw);
-    if (data.access_token && data.refresh_token) {
-      const session = { access_token: data.access_token, refresh_token: data.refresh_token };
-      saveSession(session);
-      localStorage.removeItem('sb-supabase-auth-token');
-      return session;
-    }
-  } catch {
-    /* ignore */
-  }
-  return null;
-}
-
-function loadSession(): AuthSession | null {
-  const access_token = localStorage.getItem('segra_access_token');
-  const refresh_token = localStorage.getItem('segra_refresh_token');
-  if (access_token && refresh_token) return { access_token, refresh_token };
-  return migrateOldSupabaseSession();
-}
-
-function saveSession(session: AuthSession) {
-  localStorage.setItem('segra_access_token', session.access_token);
-  localStorage.setItem('segra_refresh_token', session.refresh_token);
-}
-
-function clearAuth() {
-  localStorage.removeItem('segra_access_token');
-  localStorage.removeItem('segra_refresh_token');
-}
-
+// The backend owns the Zipline credentials (stored in settings). The frontend only
+// sends Login/Logout commands over the message bridge and mirrors the AuthState
+// messages the backend pushes back.
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [session, setSession] = useState<AuthSession | null>(null);
-  const [user, setUser] = useState<AuthUser | null>(null);
+  const [user, setUser] = useState<ZiplineUser | null>(null);
+  const [serverUrl, setServerUrl] = useState<string | null>(null);
   const [authError, setAuthError] = useState<string | null>(null);
+  const [totpRequired, setTotpRequired] = useState(false);
   const [isAuthenticating, setIsAuthenticating] = useState(false);
-  const refreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const sessionGenRef = useRef(0);
+  const loginTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const handleSignOut = useCallback(() => {
-    sessionGenRef.current++;
-    if (refreshTimerRef.current) {
-      clearTimeout(refreshTimerRef.current);
-      refreshTimerRef.current = null;
+  const clearLoginTimeout = useCallback(() => {
+    if (loginTimeoutRef.current) {
+      clearTimeout(loginTimeoutRef.current);
+      loginTimeoutRef.current = null;
     }
-    setSession(null);
-    setUser(null);
-    clearAuth();
-    sendMessageToBackend('Logout');
-    signOutCallbacks.forEach((cb) => cb());
   }, []);
 
-  // Refresh the token and update all state + push to backend
-  const refreshSession = useCallback(
-    async (currentSession: AuthSession) => {
-      const gen = sessionGenRef.current;
-      try {
-        const data = await api.refreshToken(currentSession.refresh_token);
-        if (gen !== sessionGenRef.current) return; // session changed, discard stale refresh
-        if (data.error) {
-          console.error('Token refresh failed:', data.error);
-          handleSignOut();
-          return;
-        }
-        const newSession: AuthSession = {
-          access_token: data.access_token,
-          refresh_token: data.refresh_token,
-        };
-        const newUser = getUserFromJwt(newSession.access_token);
-        setSession(newSession);
-        setUser(newUser);
-        saveSession(newSession);
-        sendMessageToBackend('Login', {
-          accessToken: newSession.access_token,
-          refreshToken: newSession.refresh_token,
-        });
-      } catch {
-        if (gen !== sessionGenRef.current) return;
-        console.error('Token refresh failed');
-        handleSignOut();
+  // Clean up token storage from the pre-Zipline (Segra cloud / Supabase) versions
+  useEffect(() => {
+    localStorage.removeItem('segra_access_token');
+    localStorage.removeItem('segra_refresh_token');
+    localStorage.removeItem('sb-supabase-auth-token');
+  }, []);
+
+  useEffect(() => {
+    const handler = (event: Event) => {
+      const { method, content } = (event as CustomEvent).detail ?? {};
+      if (method !== 'AuthState') return;
+
+      const state = content as AuthStateMessage;
+      clearLoginTimeout();
+      setIsAuthenticating(false);
+      setTotpRequired(!!state.totpRequired);
+      setAuthError(state.error ?? null);
+
+      if (state.authenticated) {
+        setUser({ username: state.username ?? '', avatar: state.avatar ?? null });
+        setServerUrl(state.serverUrl ?? null);
+      } else {
+        setUser(null);
+        setServerUrl(null);
       }
+    };
+
+    window.addEventListener('websocket-message', handler);
+    return () => window.removeEventListener('websocket-message', handler);
+  }, [clearLoginTimeout]);
+
+  const startLogin = useCallback(() => {
+    setIsAuthenticating(true);
+    setAuthError(null);
+    clearLoginTimeout();
+    loginTimeoutRef.current = setTimeout(() => {
+      setIsAuthenticating(false);
+      setAuthError('No response from the Segra backend. Please try again.');
+    }, 20000);
+  }, [clearLoginTimeout]);
+
+  const loginWithPassword = useCallback(
+    (server: string, username: string, password: string, code?: string) => {
+      startLogin();
+      sendMessageToBackend('Login', {
+        serverUrl: server,
+        username,
+        password,
+        ...(code ? { code } : {}),
+      });
     },
-    [handleSignOut],
+    [startLogin],
   );
 
-  // Schedule auto-refresh whenever session changes
-  useEffect(() => {
-    if (refreshTimerRef.current) {
-      clearTimeout(refreshTimerRef.current);
-      refreshTimerRef.current = null;
-    }
-    if (!session) return;
+  const loginWithToken = useCallback(
+    (server: string, apiToken: string) => {
+      startLogin();
+      sendMessageToBackend('Login', { serverUrl: server, apiToken });
+    },
+    [startLogin],
+  );
 
-    const exp = getJwtExp(session.access_token);
-    // Refresh 30 seconds before expiry
-    const msUntilRefresh = (exp - 30) * 1000 - Date.now();
-
-    if (msUntilRefresh <= 0) {
-      // Already expired, refresh now
-      refreshSession(session);
-    } else {
-      refreshTimerRef.current = setTimeout(() => refreshSession(session), msUntilRefresh);
-    }
-
-    return () => {
-      if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
-    };
-  }, [session, refreshSession]);
-
-  // On mount: check URL params for Discord callback tokens, else load from localStorage
-  useEffect(() => {
-    const urlParams = new URLSearchParams(window.location.search);
-    const accessToken = urlParams.get('access_token');
-    const refreshToken = urlParams.get('refresh_token');
-
-    if (accessToken && refreshToken) {
-      // Discord OAuth callback with tokens
-      const newSession = { access_token: accessToken, refresh_token: refreshToken };
-      const authUser = getUserFromJwt(accessToken);
-
-      if (!authUser) {
-        setAuthError('Failed to authenticate. Please try again.');
-        return;
-      }
-
-      setSession(newSession);
-      setUser(authUser);
-      saveSession(newSession);
-      // Backend login state is synced by the WebSocket onOpen handler once the connection is ready.
-
-      // Clean URL
-      window.history.replaceState({}, document.title, window.location.pathname);
-      return;
-    }
-
-    // Load from localStorage
-    const stored = loadSession();
-    if (stored) {
-      const storedUser = getUserFromJwt(stored.access_token);
-      if (storedUser) {
-        setSession(stored);
-        setUser(storedUser);
-        // Backend login state is synced by the WebSocket onOpen handler once the connection is ready.
-      }
-    }
-  }, []);
-
-  const login = useCallback(async (email: string, password: string) => {
-    sessionGenRef.current++;
-    setIsAuthenticating(true);
+  const signOut = useCallback(() => {
+    clearLoginTimeout();
+    setUser(null);
+    setServerUrl(null);
     setAuthError(null);
-    try {
-      const data = await api.login(email, password);
-      if (data.error) {
-        setAuthError(data.error);
-        return;
-      }
-      if (!data.session) {
-        setAuthError('Login failed - no session returned');
-        return;
-      }
-      const newSession: AuthSession = data.session;
-      const authUser = getUserFromJwt(newSession.access_token);
-      setSession(newSession);
-      setUser(authUser);
-      saveSession(newSession);
-      sendMessageToBackend('Login', {
-        accessToken: newSession.access_token,
-        refreshToken: newSession.refresh_token,
-      });
-    } catch {
-      setAuthError('Login failed. Please try again.');
-    } finally {
-      setIsAuthenticating(false);
-    }
-  }, []);
-
-  const register = useCallback(async (email: string, password: string) => {
-    sessionGenRef.current++;
-    setIsAuthenticating(true);
-    setAuthError(null);
-    try {
-      const data = await api.register(email, password);
-      if (data.error) {
-        setAuthError(data.error);
-        return { confirmEmail: false };
-      }
-      if (data.confirmEmail) {
-        return { confirmEmail: true };
-      }
-      // Auto-confirmed: log in automatically
-      if (data.session) {
-        const newSession: AuthSession = data.session;
-        const authUser = getUserFromJwt(newSession.access_token);
-        setSession(newSession);
-        setUser(authUser);
-        saveSession(newSession);
-        sendMessageToBackend('Login', {
-          accessToken: newSession.access_token,
-          refreshToken: newSession.refresh_token,
-        });
-      }
-      return { confirmEmail: false };
-    } catch {
-      setAuthError('Registration failed. Please try again.');
-      return { confirmEmail: false };
-    } finally {
-      setIsAuthenticating(false);
-    }
-  }, []);
-
-  const loginWithDiscord = useCallback(() => {
-    const desktopRedirect = window.location.origin;
-    window.location.href = api.getDiscordLoginUrl(desktopRedirect);
-  }, []);
+    setTotpRequired(false);
+    sendMessageToBackend('Logout');
+    signOutCallbacks.forEach((cb) => cb());
+  }, [clearLoginTimeout]);
 
   const value: AuthContextType = {
     user,
-    session,
+    serverUrl,
+    isAuthenticated: user !== null,
     authError,
+    totpRequired,
     isAuthenticating,
     clearAuthError: () => setAuthError(null),
-    login,
-    register,
-    loginWithDiscord,
-    signOut: handleSignOut,
+    loginWithPassword,
+    loginWithToken,
+    signOut,
   };
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

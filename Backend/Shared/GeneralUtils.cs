@@ -213,7 +213,10 @@ namespace Segra.Backend.Shared
             "accesstoken",
             "refreshtoken",
             "jwt",
-            "state"
+            "state",
+            "password",
+            "apitoken",
+            "code"
         ];
 
         public static string RedactSensitiveInfo(string message)

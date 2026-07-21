@@ -4,7 +4,6 @@ import { useAppState } from '../Context/AppStateContext';
 import { BookmarkType, Content, includeInHighlight } from '../Models/types';
 import { sendMessageToBackend } from '../Utils/MessageUtils';
 import { openFileLocation } from '../Utils/FileUtils';
-import { useAuth } from '../Hooks/useAuth.tsx';
 import { useModal } from '../Context/ModalContext';
 import UploadModal from './UploadModal';
 import {
@@ -35,6 +34,10 @@ let hasSeededKnownContent = false;
 // Thumbnails already loaded this session, so a remounted card shows instantly without re-animating.
 const loadedThumbnailKeys = new Set<string>();
 
+// Uploads now store the full Zipline share URL; legacy entries only stored a Segra video id.
+const getShareUrl = (uploadId: string) =>
+  uploadId.startsWith('http') ? uploadId : `https://segra.tv/video/${uploadId}`;
+
 interface VideoCardProps {
   content?: Content; // Optional for skeleton cards
   type: VideoType;
@@ -56,7 +59,6 @@ export default function ContentCard({
 }: VideoCardProps) {
   const { enableAi, showNewBadgeOnVideos, airplaneMode } = useSettings();
   const { cacheFolder, content: allContent } = useAppState();
-  const { session } = useAuth();
   const { openModal, closeModal } = useModal();
   const { aiProgress } = useAiHighlights();
   const { compressionProgress, isCompressing } = useCompression();
@@ -262,18 +264,11 @@ export default function ContentCard({
         key={`${Math.random()}`}
         video={content!}
         onClose={closeModal}
-        onUpload={(title, description, visibility) => {
-          const parameters: any = {
+        onUpload={(title) => {
+          sendMessageToBackend('UploadContent', {
             FilePath: content!.filePath,
-            JWT: session?.access_token,
-            Game: content?.game,
             Title: title,
-            Description: description,
-            Visibility: visibility,
-            IgdbId: content?.igdbId?.toString(),
-          };
-
-          sendMessageToBackend('UploadContent', parameters);
+          });
         }}
       />,
     );
@@ -581,8 +576,7 @@ export default function ContentCard({
                 className="btn btn-ghost btn-sm btn-circle relative group hover:bg-white/10 active:bg-white/10"
                 onClick={(e) => {
                   e.stopPropagation();
-                  const url = `https://segra.tv/video/${content!.uploadId}`;
-                  navigator.clipboard.writeText(url);
+                  navigator.clipboard.writeText(getShareUrl(content!.uploadId!));
                   setCopied(true);
                   setTimeout(() => setCopied(false), 1500);
                 }}
@@ -603,7 +597,7 @@ export default function ContentCard({
                 onClick={(e) => {
                   e.stopPropagation();
                   sendMessageToBackend('OpenInBrowser', {
-                    Url: `https://segra.tv/video/${content!.uploadId}`,
+                    Url: getShareUrl(content!.uploadId!),
                   });
                   setOpened(true);
                   setTimeout(() => setOpened(false), 1500);

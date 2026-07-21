@@ -52,6 +52,9 @@ namespace Segra.Backend.Media
                 string fileNameWithoutExtension = Path.GetFileNameWithoutExtension(fileName);
                 title = message.GetProperty("Title").GetString()!;
 
+                if (!AuthService.IsAuthenticated())
+                    throw new Exception("Not connected to a Zipline server. Connect in Settings > Account first.");
+
                 cts = new CancellationTokenSource();
                 lock (_uploadLock)
                 {
@@ -96,14 +99,8 @@ namespace Segra.Backend.Media
                     }
                 }
 
-                var fileContent = new ProgressableStreamContent(fileBytes, "application/octet-stream", ProgressHandler, cts.Token);
+                var fileContent = new ProgressableStreamContent(fileBytes, GetContentType(fileName), ProgressHandler, cts.Token);
                 formData.Add(fileContent, "file", fileName);
-
-                AddOptionalContent(formData, message, "Game");
-                AddOptionalContent(formData, message, "Title");
-                AddOptionalContent(formData, message, "Description");
-                AddOptionalContent(formData, message, "IgdbId");
-                AddOptionalContent(formData, message, "Visibility");
 
                 await MessageService.SendFrontendMessage("UploadProgress", new
                 {
@@ -114,11 +111,13 @@ namespace Segra.Backend.Media
                     message = "Starting upload..."
                 });
 
-                var request = new HttpRequestMessage(HttpMethod.Post, "https://processing.segra.tv/upload")
+                var request = new HttpRequestMessage(HttpMethod.Post, $"{AuthService.ServerUrl}/api/upload")
                 {
                     Content = formData
                 };
-                request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", await AuthService.GetJwtAsync());
+                // Zipline expects the raw API token as the Authorization header (no "Bearer" scheme)
+                request.Headers.TryAddWithoutValidation("Authorization", AuthService.ApiToken);
+                request.Headers.TryAddWithoutValidation("x-zipline-original-name", "true");
 
                 var response = await _httpClient.SendAsync(request, cts.Token);
                 response.EnsureSuccessStatusCode();
@@ -146,16 +145,20 @@ namespace Segra.Backend.Media
                     try
                     {
                         var responseJson = JsonSerializer.Deserialize<JsonElement>(responseContent);
-                        if (responseJson.TryGetProperty("success", out var successElement) &&
-                            successElement.GetBoolean() &&
-                            responseJson.TryGetProperty("url", out var urlElement))
+                        if (responseJson.TryGetProperty("files", out var filesElement) &&
+                            filesElement.ValueKind == JsonValueKind.Array &&
+                            filesElement.GetArrayLength() > 0 &&
+                            filesElement[0].TryGetProperty("url", out var urlElement))
                         {
                             string url = urlElement.GetString()!;
                             if (!string.IsNullOrEmpty(url))
                             {
-                                // Extract uploadId from the URL (after the last slash)
-                                string uploadId = url.Split('/').Last();
-                                Log.Information($"Extracted upload ID: {uploadId}");
+                                if (url.StartsWith('/'))
+                                    url = AuthService.ServerUrl + url;
+
+                                // Store the full Zipline share URL; the frontend uses it verbatim
+                                string uploadId = url;
+                                Log.Information($"Zipline share URL: {url}");
 
                                 // Update the content with the uploadId
                                 var contentList = AppState.Instance.Content.ToList();
@@ -294,12 +297,17 @@ namespace Segra.Backend.Media
             }
         }
 
-        private static void AddOptionalContent(MultipartFormDataContent formData, JsonElement message, string field)
+        private static string GetContentType(string fileName) => Path.GetExtension(fileName).ToLowerInvariant() switch
         {
-            if (message.TryGetProperty(field, out JsonElement element))
-            {
-                formData.Add(new StringContent(element.GetString()!), field.ToLower());
-            }
-        }
+            ".mp4" => "video/mp4",
+            ".mkv" => "video/x-matroska",
+            ".webm" => "video/webm",
+            ".mov" => "video/quicktime",
+            ".avi" => "video/x-msvideo",
+            ".gif" => "image/gif",
+            ".png" => "image/png",
+            ".jpg" or ".jpeg" => "image/jpeg",
+            _ => "application/octet-stream"
+        };
     }
 }

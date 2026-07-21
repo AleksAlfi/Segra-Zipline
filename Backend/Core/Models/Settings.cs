@@ -1191,22 +1191,23 @@ namespace Segra.Backend.Core.Models
         }
     }
 
-    // Auth class for storing authentication tokens
+    // Auth class for storing the Zipline server connection
     internal class Auth
     {
-        private string _jwt = string.Empty;
-        private string _refreshToken = string.Empty;
+        private string _serverUrl = string.Empty;
+        private string _apiToken = string.Empty;
+        private string _username = string.Empty;
 
-        [JsonPropertyName("jwt")]
-        public string Jwt
+        [JsonPropertyName("serverUrl")]
+        public string ServerUrl
         {
-            get => _jwt;
+            get => _serverUrl;
             set
             {
-                if (_jwt != value)
+                if (_serverUrl != value)
                 {
-                    bool hasChanged = !Settings.Instance.Auth.Jwt.Equals(value);
-                    _jwt = value;
+                    bool hasChanged = !Settings.Instance.Auth.ServerUrl.Equals(value);
+                    _serverUrl = value;
 
                     if (Settings.Instance != null && hasChanged && !Settings.Instance._isBulkUpdating)
                     {
@@ -1216,16 +1217,34 @@ namespace Segra.Backend.Core.Models
             }
         }
 
-        [JsonPropertyName("refreshToken")]
-        public string RefreshToken
+        [JsonPropertyName("apiToken")]
+        public string ApiToken
         {
-            get => _refreshToken;
+            get => _apiToken;
             set
             {
-                if (_refreshToken != value)
+                if (_apiToken != value)
                 {
-                    bool hasChanged = !Settings.Instance.Auth.RefreshToken.Equals(value);
-                    _refreshToken = value;
+                    bool hasChanged = !Settings.Instance.Auth.ApiToken.Equals(value);
+                    _apiToken = value;
+                    if (Settings.Instance != null && hasChanged && !Settings.Instance._isBulkUpdating)
+                    {
+                        SettingsService.SaveSettings();
+                    }
+                }
+            }
+        }
+
+        [JsonPropertyName("username")]
+        public string Username
+        {
+            get => _username;
+            set
+            {
+                if (_username != value)
+                {
+                    bool hasChanged = !Settings.Instance.Auth.Username.Equals(value);
+                    _username = value;
                     if (Settings.Instance != null && hasChanged && !Settings.Instance._isBulkUpdating)
                     {
                         SettingsService.SaveSettings();
@@ -1236,7 +1255,7 @@ namespace Segra.Backend.Core.Models
 
         public bool HasCredentials()
         {
-            return !string.IsNullOrEmpty(_jwt) && !string.IsNullOrEmpty(_refreshToken);
+            return !string.IsNullOrEmpty(_serverUrl) && !string.IsNullOrEmpty(_apiToken);
         }
     }
 

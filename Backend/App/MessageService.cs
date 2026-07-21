@@ -75,12 +75,10 @@ namespace Segra.Backend.App
                             break;
                         case "Login":
                             root.TryGetProperty("Parameters", out JsonElement loginParameterElement);
-                            string accessToken = loginParameterElement.GetProperty("accessToken").GetString()!;
-                            string refreshToken = loginParameterElement.GetProperty("refreshToken").GetString()!;
-                            _ = Task.Run(() => AuthService.Login(accessToken, refreshToken));
+                            _ = Task.Run(() => AuthService.HandleLogin(loginParameterElement));
                             break;
                         case "Logout":
-                            _ = Task.Run(AuthService.Logout);
+                            _ = Task.Run(AuthService.HandleLogout);
                             break;
                         case "CancelClip":
                             if (root.TryGetProperty("Parameters", out var cancelClipParams) &&
@@ -211,6 +209,7 @@ namespace Segra.Backend.App
                             Log.Information("NewConnection command received.");
                             await SendSettingsToFrontend("New connection");
                             await SendStateToFrontend("New connection");
+                            await AuthService.OnNewConnection();
 
                             await SendGameList();
 

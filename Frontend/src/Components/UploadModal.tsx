@@ -2,31 +2,20 @@ import { useState, useRef, useEffect } from 'react';
 import { Content } from '../Models/types';
 import { useSettings, useSettingsUpdater } from '../Context/SettingsContext';
 import { useAuth } from '../Hooks/useAuth.tsx';
-import { Upload, Globe, EyeOff } from 'lucide-react';
+import { Upload } from 'lucide-react';
 import Button from './Button';
-import DropdownSelect from './DropdownSelect';
 
 interface UploadModalProps {
   video: Content;
-  onUpload: (title: string, description: string, visibility: 'Public' | 'Unlisted') => void;
+  onUpload: (title: string) => void;
   onClose: () => void;
 }
 
 export default function UploadModal({ video, onUpload, onClose }: UploadModalProps) {
   const { clipShowInBrowserAfterUpload } = useSettings();
   const updateSettings = useSettingsUpdater();
-  const { session } = useAuth();
+  const { isAuthenticated } = useAuth();
   const [title, setTitle] = useState(video.title || '');
-  const [description, setDescription] = useState('');
-  const [visibility, setVisibility] = useState<'Public' | 'Unlisted'>(() =>
-    localStorage.getItem('uploadVisibility') === 'Unlisted' ? 'Unlisted' : 'Public',
-  );
-
-  const handleVisibilityChange = (value: string) => {
-    const next = value === 'Unlisted' ? 'Unlisted' : 'Public';
-    setVisibility(next);
-    localStorage.setItem('uploadVisibility', next);
-  };
   const [titleError, setTitleError] = useState(false);
   const titleInputRef = useRef<HTMLInputElement>(null);
 
@@ -48,7 +37,7 @@ export default function UploadModal({ video, onUpload, onClose }: UploadModalPro
       return;
     }
     setTitleError(false);
-    onUpload(title, description, visibility);
+    onUpload(title);
     onClose();
   };
 
@@ -94,51 +83,6 @@ export default function UploadModal({ video, onUpload, onClose }: UploadModalPro
             )}
           </div>
 
-          <div className="form-control w-full mt-4">
-            <label className="label">
-              <span className="label-text text-base-content">Description</span>
-            </label>
-            <textarea
-              tabIndex={2}
-              value={description}
-              onChange={(e) => setDescription(e.target.value)}
-              rows={4}
-              className="textarea textarea-bordered bg-base-300 w-full focus:outline focus:outline-1 focus:outline-white focus:outline-offset-0 resize-none"
-              placeholder="Add a description"
-            />
-          </div>
-
-          <div className="form-control w-full mt-4">
-            <label className="label">
-              <span className="label-text text-base-content">Visibility</span>
-            </label>
-            <DropdownSelect
-              items={[
-                {
-                  value: 'Public',
-                  label: (
-                    <span className="flex items-center gap-2">
-                      <Globe size={16} />
-                      Public
-                    </span>
-                  ),
-                },
-                {
-                  value: 'Unlisted',
-                  label: (
-                    <span className="flex items-center gap-2">
-                      <EyeOff size={16} />
-                      Unlisted
-                    </span>
-                  ),
-                },
-              ]}
-              value={visibility}
-              onChange={handleVisibilityChange}
-              align="start"
-            />
-          </div>
-
           <div className="form-control mt-4">
             <label className="label cursor-pointer justify-start gap-2">
               <input
@@ -164,10 +108,10 @@ export default function UploadModal({ video, onUpload, onClose }: UploadModalPro
             tabIndex={5}
             className="w-full focus:!outline focus:!outline-1 focus:!outline-white focus:!outline-offset-2"
             onClick={handleUpload}
-            disabled={session === null}
+            disabled={!isAuthenticated}
           >
             <Upload className="w-5 h-5" />
-            {session === null ? 'Login to upload' : 'Upload'}
+            {!isAuthenticated ? 'Connect to Zipline to upload' : 'Upload'}
           </Button>
         </div>
       </div>

@@ -2,6 +2,8 @@
 
 **Segra** is a powerful recording software built on Open Broadcaster Software (OBS), designed for gamers and content creators. Record, clip, and upload gameplay highlights effortlessly, with smart automation and deep game integration.
 
+> **Fork notice:** This fork replaces Segra's cloud (segra.tv accounts and upload hosting) with a self-hosted **[Zipline](https://github.com/diced/zipline)** server. Log in under Settings → Account with your Zipline URL and either your username/password or an API token; uploads go to `POST /api/upload` on your server and share links point at your Zipline instance.
+
 ### ✂️ Clip Editor
 
 ![image](https://github.com/user-attachments/assets/beed0524-35f1-48be-9dd8-c2455959d2f9)
@@ -21,7 +23,7 @@
 ## ✨ Features  
 - **Auto-Start Recording**: Begin recording automatically when your game launches.  
 - **Instant Clipping**: Save key moments with a hotkey.
-- **Direct Upload**: Share clips to **[Segra.tv](https://segra.tv)** instantly.  
+- **Direct Upload**: Share clips to your self-hosted **[Zipline](https://github.com/diced/zipline)** server instantly.  
 - **Game Integration**: Tracks in-game stats (kills, deaths, assists) to auto-generate highlights, powered by AI.  
 - **Lightweight & Fast**: Built on OBS for 4K with 144 FPS capture with minimal performance impact.  
 - **Customizable Settings**: Adjust recording quality (NVENC/AMD VCE), hotkeys, storage paths, etc.
