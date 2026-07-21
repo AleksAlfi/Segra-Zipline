@@ -363,3 +363,5 @@ MigrationBackup/
 
 releases-out/
 private-builds/
+releases-linux/
+releases-linux-generic/

@@ -64,6 +64,7 @@ namespace Segra.Backend.Core.Models
         private bool _clipShowInBrowserAfterUpload = false;
         private string _ziplineFolder = "Clips";
         private string _ziplineDomain = BuildConfig.DefaultClipDomain; // Baked-in default; empty in normal builds
+        private bool _ziplineGroupByGame = false;
         private string _clipEncoder = "cpu";
         private int _clipQualityCpu = 23; // CPU CRF: 17 (High) to 28 (Low)
         private int _clipQualityGpu = 23; // GPU (CQ/QP/ICQ): 0-1 (High) to 51 (Low)
@@ -655,6 +656,20 @@ namespace Segra.Backend.Core.Models
                 if (_ziplineDomain != value)
                 {
                     _ziplineDomain = value;
+                }
+            }
+        }
+
+        // When true, uploads are filed into a per-game subfolder under ZiplineFolder
+        [JsonPropertyName("ziplineGroupByGame")]
+        public bool ZiplineGroupByGame
+        {
+            get => _ziplineGroupByGame;
+            set
+            {
+                if (_ziplineGroupByGame != value)
+                {
+                    _ziplineGroupByGame = value;
                 }
             }
         }

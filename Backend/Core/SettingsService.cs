@@ -244,6 +244,13 @@ namespace Segra.Backend.Core
                 hasChanges = true;
             }
 
+            if (settings.ZiplineGroupByGame != updatedSettings.ZiplineGroupByGame)
+            {
+                Log.Information($"ZiplineGroupByGame changed from '{settings.ZiplineGroupByGame}' to '{updatedSettings.ZiplineGroupByGame}'");
+                settings.ZiplineGroupByGame = updatedSettings.ZiplineGroupByGame;
+                hasChanges = true;
+            }
+
             if (settings.ClipQualityCpu != updatedSettings.ClipQualityCpu)
             {
                 Log.Information($"ClipQualityCpu changed from '{settings.ClipQualityCpu}' to '{updatedSettings.ClipQualityCpu}'");

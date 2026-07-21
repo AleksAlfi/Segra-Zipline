@@ -302,6 +302,7 @@ export interface Settings {
   clipShowInBrowserAfterUpload: boolean; // Open browser after upload
   ziplineFolder: string; // Zipline folder name for uploads (auto-created); empty = no folder
   ziplineDomain: string; // Host used for returned share URLs (x-zipline-domain); empty = server default
+  ziplineGroupByGame: boolean; // File uploads into a per-game subfolder under ziplineFolder
   clipEncoder: ClipEncoder;
   clipQualityCpu: number; // CPU CRF: 17 (High) to 28 (Low)
   clipQualityGpu: number; // GPU (CQ/QP/ICQ): 0-1 (High) to 51 (Low)
@@ -384,6 +385,7 @@ export const initialSettings: Settings = {
   clipShowInBrowserAfterUpload: false,
   ziplineFolder: 'Clips',
   ziplineDomain: '',
+  ziplineGroupByGame: false,
   clipEncoder: 'cpu',
   clipQualityCpu: 23,
   clipQualityGpu: 23,

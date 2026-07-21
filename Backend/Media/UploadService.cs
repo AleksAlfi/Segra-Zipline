@@ -120,7 +120,9 @@ namespace Segra.Backend.Media
                 request.Headers.TryAddWithoutValidation("Authorization", AuthService.ApiToken);
                 request.Headers.TryAddWithoutValidation("x-zipline-original-name", "true");
 
-                string? folderId = await GetOrCreateFolderIdAsync(cts.Token);
+                var uploadContent = AppState.Instance.Content.FirstOrDefault(c =>
+                    Path.GetFileNameWithoutExtension(c.FileName) == fileNameWithoutExtension);
+                string? folderId = await GetUploadFolderIdAsync(uploadContent?.Game, cts.Token);
                 if (folderId != null)
                     request.Headers.TryAddWithoutValidation("x-zipline-folder", folderId);
 
@@ -306,50 +308,60 @@ namespace Segra.Backend.Media
             }
         }
 
-        // Resolves the configured Zipline folder name to its id, creating the folder if it doesn't
-        // exist yet. Returns null (upload goes to the root) if disabled or resolution fails —
-        // a missing folder should never block an upload.
-        private static async Task<string?> GetOrCreateFolderIdAsync(CancellationToken cancellationToken)
+        // Resolves the Zipline folder an upload should land in, creating folders on demand:
+        // the configured ZiplineFolder, plus a per-game subfolder when ZiplineGroupByGame is on.
+        // Returns null (upload goes to the root) if disabled or resolution fails — a missing
+        // folder should never block an upload.
+        private static async Task<string?> GetUploadFolderIdAsync(string? game, CancellationToken cancellationToken)
         {
-            string folderName = Settings.Instance.ZiplineFolder?.Trim() ?? string.Empty;
-            if (string.IsNullOrEmpty(folderName))
+            string parentName = Settings.Instance.ZiplineFolder?.Trim() ?? string.Empty;
+
+            string gameName = game?.Trim() ?? string.Empty;
+            if (!Settings.Instance.ZiplineGroupByGame ||
+                gameName.Equals("Unknown", StringComparison.OrdinalIgnoreCase))
+            {
+                gameName = string.Empty;
+            }
+
+            if (string.IsNullOrEmpty(parentName) && string.IsNullOrEmpty(gameName))
                 return null;
 
             try
             {
-                var listRequest = new HttpRequestMessage(HttpMethod.Get, $"{AuthService.ServerUrl}/api/user/folders?noincl=true");
-                listRequest.Headers.TryAddWithoutValidation("Authorization", AuthService.ApiToken);
+                using var foldersDoc = await FetchFoldersAsync(cancellationToken);
+                var folders = foldersDoc.RootElement;
 
-                var listResponse = await _httpClient.SendAsync(listRequest, cancellationToken);
-                listResponse.EnsureSuccessStatusCode();
-
-                using var listDoc = JsonDocument.Parse(await listResponse.Content.ReadAsStringAsync(cancellationToken));
-                foreach (var folder in listDoc.RootElement.EnumerateArray())
+                string? parentId = null;
+                if (!string.IsNullOrEmpty(parentName))
                 {
-                    if (folder.TryGetProperty("name", out var nameElement) &&
-                        string.Equals(nameElement.GetString(), folderName, StringComparison.OrdinalIgnoreCase) &&
-                        folder.TryGetProperty("id", out var idElement))
+                    parentId = FindFolderId(folders, parentName, null)
+                        ?? await CreateFolderAsync(parentName, null, cancellationToken);
+                    if (parentId == null)
+                        return null;
+                }
+
+                if (string.IsNullOrEmpty(gameName))
+                    return parentId;
+
+                string? gameFolderId = FindFolderId(folders, gameName, parentId);
+                if (gameFolderId == null)
+                {
+                    try
                     {
-                        return idElement.GetString();
+                        gameFolderId = await CreateFolderAsync(gameName, parentId, cancellationToken);
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        throw;
+                    }
+                    catch (Exception ex)
+                    {
+                        // Nested folders need a recent Zipline version; fall back to the parent folder
+                        Log.Warning($"Could not create game subfolder '{gameName}': {ex.Message}");
                     }
                 }
 
-                var createRequest = new HttpRequestMessage(HttpMethod.Post, $"{AuthService.ServerUrl}/api/user/folders")
-                {
-                    Content = new StringContent(
-                        JsonSerializer.Serialize(new { name = folderName }),
-                        System.Text.Encoding.UTF8, "application/json")
-                };
-                createRequest.Headers.TryAddWithoutValidation("Authorization", AuthService.ApiToken);
-
-                var createResponse = await _httpClient.SendAsync(createRequest, cancellationToken);
-                createResponse.EnsureSuccessStatusCode();
-
-                using var createDoc = JsonDocument.Parse(await createResponse.Content.ReadAsStringAsync(cancellationToken));
-                string? id = createDoc.RootElement.TryGetProperty("id", out var createdIdElement)
-                    ? createdIdElement.GetString() : null;
-                Log.Information($"Created Zipline folder '{folderName}' ({id})");
-                return id;
+                return gameFolderId ?? parentId;
             }
             catch (OperationCanceledException)
             {
@@ -357,9 +369,73 @@ namespace Segra.Backend.Media
             }
             catch (Exception ex)
             {
-                Log.Warning($"Could not resolve Zipline folder '{folderName}', uploading to root: {ex.Message}");
+                Log.Warning($"Could not resolve Zipline folder, uploading to root: {ex.Message}");
                 return null;
             }
+        }
+
+        private static async Task<JsonDocument> FetchFoldersAsync(CancellationToken cancellationToken)
+        {
+            var request = new HttpRequestMessage(HttpMethod.Get, $"{AuthService.ServerUrl}/api/user/folders?noincl=true");
+            request.Headers.TryAddWithoutValidation("Authorization", AuthService.ApiToken);
+
+            var response = await _httpClient.SendAsync(request, cancellationToken);
+            response.EnsureSuccessStatusCode();
+            return JsonDocument.Parse(await response.Content.ReadAsStringAsync(cancellationToken));
+        }
+
+        private static string? FindFolderId(JsonElement folders, string name, string? parentId)
+        {
+            foreach (var folder in folders.EnumerateArray())
+            {
+                if (!folder.TryGetProperty("name", out var nameElement) ||
+                    !string.Equals(nameElement.GetString(), name, StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                if (!string.Equals(GetParentId(folder), parentId, StringComparison.Ordinal))
+                    continue;
+
+                return folder.TryGetProperty("id", out var idElement) ? idElement.GetString() : null;
+            }
+
+            return null;
+        }
+
+        private static string? GetParentId(JsonElement folder)
+        {
+            if (folder.TryGetProperty("parentId", out var parentIdElement) &&
+                parentIdElement.ValueKind == JsonValueKind.String)
+                return parentIdElement.GetString();
+
+            if (folder.TryGetProperty("parent", out var parentElement) &&
+                parentElement.ValueKind == JsonValueKind.Object &&
+                parentElement.TryGetProperty("id", out var idElement))
+                return idElement.GetString();
+
+            return null;
+        }
+
+        private static async Task<string?> CreateFolderAsync(string name, string? parentId, CancellationToken cancellationToken)
+        {
+            var body = new Dictionary<string, object> { ["name"] = name };
+            if (parentId != null)
+                body["parentId"] = parentId;
+
+            var request = new HttpRequestMessage(HttpMethod.Post, $"{AuthService.ServerUrl}/api/user/folders")
+            {
+                Content = new StringContent(
+                    JsonSerializer.Serialize(body),
+                    System.Text.Encoding.UTF8, "application/json")
+            };
+            request.Headers.TryAddWithoutValidation("Authorization", AuthService.ApiToken);
+
+            var response = await _httpClient.SendAsync(request, cancellationToken);
+            response.EnsureSuccessStatusCode();
+
+            using var doc = JsonDocument.Parse(await response.Content.ReadAsStringAsync(cancellationToken));
+            string? id = doc.RootElement.TryGetProperty("id", out var idElement) ? idElement.GetString() : null;
+            Log.Information($"Created Zipline folder '{name}' ({id})");
+            return id;
         }
 
         // The clip title becomes the multipart filename (keeping the real extension) so Zipline's
