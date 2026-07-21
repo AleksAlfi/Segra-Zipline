@@ -362,4 +362,6 @@ MigrationBackup/
 .playwright-mcp/
 
 releases-out/
+private-builds/
 releases-linux/
+releases-linux-generic/

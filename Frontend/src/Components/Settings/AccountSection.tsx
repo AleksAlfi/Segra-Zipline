@@ -29,7 +29,7 @@ export default function AccountSection() {
   const [tab, setTab] = useState<AuthTab>(() =>
     localStorage.getItem('ziplineLoginMethod') === 'token' ? 'token' : 'password',
   );
-  const { ziplineFolder, ziplineDomain } = useSettings();
+  const { ziplineFolder, ziplineDomain, ziplineGroupByGame } = useSettings();
   const updateSettings = useSettingsUpdater();
   const [folderDraft, setFolderDraft] = useState(ziplineFolder);
   const [domainDraft, setDomainDraft] = useState(ziplineDomain);
@@ -319,6 +319,22 @@ export default function AccountSection() {
           <div className="text-xs opacity-60 mt-2">
             Uploads are filed into this Zipline folder (created automatically). Leave empty to
             upload to the root.
+          </div>
+        </div>
+
+        <div className="form-control">
+          <label className="label cursor-pointer justify-start gap-2">
+            <input
+              type="checkbox"
+              className="checkbox checkbox-primary"
+              checked={ziplineGroupByGame}
+              onChange={(e) => updateSettings({ ziplineGroupByGame: e.target.checked })}
+            />
+            <span className="label-text text-base-content">Organize by game</span>
+          </label>
+          <div className="text-xs opacity-60">
+            Files each upload into a per-game subfolder (e.g. Clips → Overwatch). Needs a Zipline
+            version with nested-folder support; otherwise uploads fall back to the main folder.
           </div>
         </div>
 
