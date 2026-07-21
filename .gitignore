@@ -360,3 +360,5 @@ MigrationBackup/
 /Resources/wwwroot/*
 !/Resources/wwwroot/.gitkeep
 .playwright-mcp/
+
+releases-out/
