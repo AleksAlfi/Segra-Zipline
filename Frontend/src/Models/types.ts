@@ -385,7 +385,7 @@ export const initialSettings: Settings = {
   clipShowInBrowserAfterUpload: false,
   ziplineFolder: 'Clips',
   ziplineDomain: '',
-  ziplineGroupByGame: false,
+  ziplineGroupByGame: true,
   clipEncoder: 'cpu',
   clipQualityCpu: 23,
   clipQualityGpu: 23,
