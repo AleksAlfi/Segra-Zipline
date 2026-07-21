@@ -62,6 +62,8 @@ namespace Segra.Backend.Core.Models
         private Auth _auth = new Auth();
         private bool _clipClearSegmentsAfterCreatingClip = false;
         private bool _clipShowInBrowserAfterUpload = false;
+        private string _ziplineFolder = "Clips";
+        private string _ziplineDomain = string.Empty;
         private string _clipEncoder = "cpu";
         private int _clipQualityCpu = 23; // CPU CRF: 17 (High) to 28 (Low)
         private int _clipQualityGpu = 23; // GPU (CQ/QP/ICQ): 0-1 (High) to 51 (Low)
@@ -625,6 +627,34 @@ namespace Segra.Backend.Core.Models
                 if (_clipShowInBrowserAfterUpload != value)
                 {
                     _clipShowInBrowserAfterUpload = value;
+                }
+            }
+        }
+
+        // Zipline folder (by name) that uploads are filed into; created on demand. Empty disables foldering.
+        [JsonPropertyName("ziplineFolder")]
+        public string ZiplineFolder
+        {
+            get => _ziplineFolder;
+            set
+            {
+                if (_ziplineFolder != value)
+                {
+                    _ziplineFolder = value;
+                }
+            }
+        }
+
+        // Sent as x-zipline-domain so share URLs use this host; empty uses the server default.
+        [JsonPropertyName("ziplineDomain")]
+        public string ZiplineDomain
+        {
+            get => _ziplineDomain;
+            set
+            {
+                if (_ziplineDomain != value)
+                {
+                    _ziplineDomain = value;
                 }
             }
         }

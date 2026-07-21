@@ -300,6 +300,8 @@ export interface Settings {
   highlightPaddingAfter: number; // Seconds after a highlight moment
   clipClearSegmentsAfterCreatingClip: boolean;
   clipShowInBrowserAfterUpload: boolean; // Open browser after upload
+  ziplineFolder: string; // Zipline folder name for uploads (auto-created); empty = no folder
+  ziplineDomain: string; // Host used for returned share URLs (x-zipline-domain); empty = server default
   clipEncoder: ClipEncoder;
   clipQualityCpu: number; // CPU CRF: 17 (High) to 28 (Low)
   clipQualityGpu: number; // GPU (CQ/QP/ICQ): 0-1 (High) to 51 (Low)
@@ -380,6 +382,8 @@ export const initialSettings: Settings = {
   highlightPaddingAfter: 4,
   clipClearSegmentsAfterCreatingClip: false,
   clipShowInBrowserAfterUpload: false,
+  ziplineFolder: 'Clips',
+  ziplineDomain: '',
   clipEncoder: 'cpu',
   clipQualityCpu: 23,
   clipQualityGpu: 23,

@@ -230,6 +230,20 @@ namespace Segra.Backend.Core
                 hasChanges = true;
             }
 
+            if (settings.ZiplineFolder != updatedSettings.ZiplineFolder)
+            {
+                Log.Information($"ZiplineFolder changed from '{settings.ZiplineFolder}' to '{updatedSettings.ZiplineFolder}'");
+                settings.ZiplineFolder = updatedSettings.ZiplineFolder;
+                hasChanges = true;
+            }
+
+            if (settings.ZiplineDomain != updatedSettings.ZiplineDomain)
+            {
+                Log.Information($"ZiplineDomain changed from '{settings.ZiplineDomain}' to '{updatedSettings.ZiplineDomain}'");
+                settings.ZiplineDomain = updatedSettings.ZiplineDomain;
+                hasChanges = true;
+            }
+
             if (settings.ClipQualityCpu != updatedSettings.ClipQualityCpu)
             {
                 Log.Information($"ClipQualityCpu changed from '{settings.ClipQualityCpu}' to '{updatedSettings.ClipQualityCpu}'");

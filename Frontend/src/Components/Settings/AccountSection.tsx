@@ -1,6 +1,7 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { TriangleAlert, LogOut, Ellipsis, KeyRound, Lock, ShieldCheck } from 'lucide-react';
 import { useAuth } from '../../Hooks/useAuth';
+import { useSettings, useSettingsUpdater } from '../../Context/SettingsContext';
 import Button from '../Button';
 
 type AuthTab = 'password' | 'token';
@@ -27,6 +28,27 @@ export default function AccountSection() {
   const [tab, setTab] = useState<AuthTab>(() =>
     localStorage.getItem('ziplineLoginMethod') === 'token' ? 'token' : 'password',
   );
+  const { ziplineFolder, ziplineDomain } = useSettings();
+  const updateSettings = useSettingsUpdater();
+  const [folderDraft, setFolderDraft] = useState(ziplineFolder);
+  const [domainDraft, setDomainDraft] = useState(ziplineDomain);
+
+  // Keep drafts in sync when settings arrive from the backend
+  useEffect(() => setFolderDraft(ziplineFolder), [ziplineFolder]);
+  useEffect(() => setDomainDraft(ziplineDomain), [ziplineDomain]);
+
+  const commitUploadOptions = () => {
+    const folder = folderDraft.trim();
+    const domain = domainDraft
+      .trim()
+      .replace(/^https?:\/\//i, '')
+      .replace(/\/+$/, '');
+    setFolderDraft(folder);
+    setDomainDraft(domain);
+    if (folder !== ziplineFolder || domain !== ziplineDomain) {
+      updateSettings({ ziplineFolder: folder, ziplineDomain: domain });
+    }
+  };
 
   const validateServer = () => {
     if (!server.trim()) {
@@ -206,7 +228,7 @@ export default function AccountSection() {
   }
 
   return (
-    <div className="p-4 bg-base-300 rounded-lg shadow-md border border-custom">
+    <div className="p-4 bg-base-300 rounded-lg shadow-md border border-custom space-y-4">
       <div className="flex items-center justify-between flex-wrap gap-4">
         <div className="flex items-center gap-4 min-w-0">
           {/* Avatar Container */}
@@ -265,6 +287,45 @@ export default function AccountSection() {
                 </Button>
               </li>
             </ul>
+          </div>
+        </div>
+      </div>
+
+      {/* Upload options */}
+      <div className="border-t border-custom pt-4 space-y-4">
+        <h4 className="font-semibold">Upload Options</h4>
+
+        <div className="form-control">
+          <div className="mb-2">Folder</div>
+          <input
+            type="text"
+            value={folderDraft}
+            onChange={(e) => setFolderDraft(e.target.value)}
+            onBlur={commitUploadOptions}
+            onKeyDown={(e) => e.key === 'Enter' && (e.target as HTMLInputElement).blur()}
+            className="input input-bordered bg-base-200 w-full"
+            placeholder="Clips"
+          />
+          <div className="text-xs opacity-60 mt-2">
+            Uploads are filed into this Zipline folder (created automatically). Leave empty to
+            upload to the root.
+          </div>
+        </div>
+
+        <div className="form-control">
+          <div className="mb-2">Share Domain</div>
+          <input
+            type="text"
+            value={domainDraft}
+            onChange={(e) => setDomainDraft(e.target.value)}
+            onBlur={commitUploadOptions}
+            onKeyDown={(e) => e.key === 'Enter' && (e.target as HTMLInputElement).blur()}
+            className="input input-bordered bg-base-200 w-full"
+            placeholder="clip.example.com"
+          />
+          <div className="text-xs opacity-60 mt-2">
+            Share links use this domain instead of the server default. The domain must point at your
+            Zipline instance (DNS + reverse proxy). Leave empty to use the server URL.
           </div>
         </div>
       </div>

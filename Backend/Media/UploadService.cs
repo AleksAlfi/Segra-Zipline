@@ -99,8 +99,9 @@ namespace Segra.Backend.Media
                     }
                 }
 
+                // Upload under the clip title so "add original name" makes downloads use it
                 var fileContent = new ProgressableStreamContent(fileBytes, GetContentType(fileName), ProgressHandler, cts.Token);
-                formData.Add(fileContent, "file", fileName);
+                formData.Add(fileContent, "file", BuildUploadFileName(title, fileName));
 
                 await MessageService.SendFrontendMessage("UploadProgress", new
                 {
@@ -118,6 +119,14 @@ namespace Segra.Backend.Media
                 // Zipline expects the raw API token as the Authorization header (no "Bearer" scheme)
                 request.Headers.TryAddWithoutValidation("Authorization", AuthService.ApiToken);
                 request.Headers.TryAddWithoutValidation("x-zipline-original-name", "true");
+
+                string? folderId = await GetOrCreateFolderIdAsync(cts.Token);
+                if (folderId != null)
+                    request.Headers.TryAddWithoutValidation("x-zipline-folder", folderId);
+
+                string domain = NormalizeDomain(Settings.Instance.ZiplineDomain);
+                if (!string.IsNullOrEmpty(domain))
+                    request.Headers.TryAddWithoutValidation("x-zipline-domain", domain);
 
                 var response = await _httpClient.SendAsync(request, cts.Token);
                 response.EnsureSuccessStatusCode();
@@ -295,6 +304,85 @@ namespace Segra.Backend.Media
                 length = _content.Length;
                 return true;
             }
+        }
+
+        // Resolves the configured Zipline folder name to its id, creating the folder if it doesn't
+        // exist yet. Returns null (upload goes to the root) if disabled or resolution fails —
+        // a missing folder should never block an upload.
+        private static async Task<string?> GetOrCreateFolderIdAsync(CancellationToken cancellationToken)
+        {
+            string folderName = Settings.Instance.ZiplineFolder?.Trim() ?? string.Empty;
+            if (string.IsNullOrEmpty(folderName))
+                return null;
+
+            try
+            {
+                var listRequest = new HttpRequestMessage(HttpMethod.Get, $"{AuthService.ServerUrl}/api/user/folders?noincl=true");
+                listRequest.Headers.TryAddWithoutValidation("Authorization", AuthService.ApiToken);
+
+                var listResponse = await _httpClient.SendAsync(listRequest, cancellationToken);
+                listResponse.EnsureSuccessStatusCode();
+
+                using var listDoc = JsonDocument.Parse(await listResponse.Content.ReadAsStringAsync(cancellationToken));
+                foreach (var folder in listDoc.RootElement.EnumerateArray())
+                {
+                    if (folder.TryGetProperty("name", out var nameElement) &&
+                        string.Equals(nameElement.GetString(), folderName, StringComparison.OrdinalIgnoreCase) &&
+                        folder.TryGetProperty("id", out var idElement))
+                    {
+                        return idElement.GetString();
+                    }
+                }
+
+                var createRequest = new HttpRequestMessage(HttpMethod.Post, $"{AuthService.ServerUrl}/api/user/folders")
+                {
+                    Content = new StringContent(
+                        JsonSerializer.Serialize(new { name = folderName }),
+                        System.Text.Encoding.UTF8, "application/json")
+                };
+                createRequest.Headers.TryAddWithoutValidation("Authorization", AuthService.ApiToken);
+
+                var createResponse = await _httpClient.SendAsync(createRequest, cancellationToken);
+                createResponse.EnsureSuccessStatusCode();
+
+                using var createDoc = JsonDocument.Parse(await createResponse.Content.ReadAsStringAsync(cancellationToken));
+                string? id = createDoc.RootElement.TryGetProperty("id", out var createdIdElement)
+                    ? createdIdElement.GetString() : null;
+                Log.Information($"Created Zipline folder '{folderName}' ({id})");
+                return id;
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                Log.Warning($"Could not resolve Zipline folder '{folderName}', uploading to root: {ex.Message}");
+                return null;
+            }
+        }
+
+        // The clip title becomes the multipart filename (keeping the real extension) so Zipline's
+        // originalName — and therefore the download name — matches the clip, not the disk file.
+        private static string BuildUploadFileName(string title, string fileName)
+        {
+            string sanitized = string.Concat(title.Split(Path.GetInvalidFileNameChars())).Trim();
+            if (string.IsNullOrEmpty(sanitized))
+                return fileName;
+
+            if (sanitized.Length > 100)
+                sanitized = sanitized[..100].Trim();
+
+            return sanitized + Path.GetExtension(fileName);
+        }
+
+        private static string NormalizeDomain(string? domain)
+        {
+            domain = domain?.Trim() ?? string.Empty;
+            domain = domain.Replace("https://", "", StringComparison.OrdinalIgnoreCase)
+                           .Replace("http://", "", StringComparison.OrdinalIgnoreCase)
+                           .TrimEnd('/');
+            return domain;
         }
 
         private static string GetContentType(string fileName) => Path.GetExtension(fileName).ToLowerInvariant() switch
