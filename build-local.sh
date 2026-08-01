@@ -8,7 +8,8 @@ cd "$SCRIPT_DIR"
 # Fork options (Segra-Zipline):
 #   --url X       bake a default Zipline server URL into the exe (prefills login)
 #   --clipurl X   bake a default share domain (x-zipline-domain) into the exe
-#   --installer   pack a Velopack installer (setup exe on Windows, AppImage on Linux)
+#   --installer   pack a Velopack installer (Windows setup exe; no effect on Linux —
+#                 use ./build-flatpak.sh for a distributable Linux package)
 #   --version X   installer package version. Defaults to upstream's (Segergren/Segra)
 #                 latest release version so the OBS compatibility manifest treats the
 #                 fork exactly like stock Segra. Bump the patch past upstream for
@@ -244,22 +245,6 @@ LAUNCHER
         chmod +x publish/obs-nvenc-test publish/obs-ffmpeg-mux 2>/dev/null || true
     else
         echo "note: packaging/linux/obs-helpers missing; NVENC and recording muxing will not work."
-    fi
-
-    # Build a Velopack AppImage installer when the vpk CLI is available and we're on Linux.
-    # (vpk's Linux packer only runs on Linux; install it with: dotnet tool install -g vpk)
-    if $INSTALLER && command -v vpk >/dev/null 2>&1 && [[ "$(uname -s)" == "Linux" ]]; then
-        echo ""
-        echo "=== Packaging AppImage (Velopack) ==="
-        rm -rf releases-out
-        # The app self-configures its OBS runtime on launch (Backend/Platform/Linux/LinuxObsRuntime.cs),
-        # so the AppImage's main executable is just Segra; obs-studio is a runtime dependency on the host.
-        vpk pack -u SegraZipline -v "$VERSION" -p publish -e Segra -o releases-out --packTitle "Segra" -i icon.png \
-            && echo "Installer: $SCRIPT_DIR/releases-out/  (*.AppImage)" \
-            || echo "vpk pack failed (continuing without an installer)."
-    elif $INSTALLER; then
-        echo ""
-        echo "(No AppImage: install the Velopack CLI ('dotnet tool install -g vpk') and run this on Linux to produce an installer.)"
     fi
 
     # This script only produces a runnable publish/ for local dev, not a distributable package.
