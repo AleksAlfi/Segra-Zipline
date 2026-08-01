@@ -104,20 +104,15 @@ if $INSTALLER && [[ -z "$VERSION" ]]; then
   echo "Mimicking upstream version: $VERSION"
 fi
 
-if $INSTALLER; then
-  echo "=== Stamping frontend version $VERSION ==="
-  cp Frontend/package.json Frontend/package.json.bak
-  restore_pkg() {
-    [[ -f Frontend/package.json.bak ]] && mv -f Frontend/package.json.bak Frontend/package.json
-  }
-  trap restore_pkg EXIT
-  node -e "const fs=require('fs');const p='Frontend/package.json';const j=JSON.parse(fs.readFileSync(p));j.version='$VERSION';fs.writeFileSync(p,JSON.stringify(j,null,2)+'\n')"
-fi
-
 # ---------------------------------------------------------------------------
 # Frontend build (also embedded by the csproj during publish; this standalone
-# copy feeds the debug static-file server path).
+# copy feeds the debug static-file server path). SEGRA_VERSION stamps
+# __APP_VERSION__ so it matches the Velopack version in installer builds;
+# exported so the csproj's own `npm run build` during dotnet publish sees it too.
 # ---------------------------------------------------------------------------
+if $INSTALLER; then
+  export SEGRA_VERSION="$VERSION"
+fi
 echo "=== Building Frontend ==="
 (cd Frontend && npm run build)
 
@@ -241,6 +236,16 @@ LAUNCHER
     chmod +x publish/run.sh 2>/dev/null || true
     chmod +x publish/Segra 2>/dev/null || true
 
+    # OBS resolves its subprocess helpers next to the running executable (readlink /proc/self/exe ->
+    # dirname), NOT in the downloaded OBS bundle. Ship them beside Segra so NVENC probing
+    # (obs-nvenc-test) and recording/replay muxing (obs-ffmpeg-mux) work. Built by Obs/build-linux-bundle.sh.
+    if [ -d packaging/linux/obs-helpers ]; then
+        cp -a packaging/linux/obs-helpers/. publish/
+        chmod +x publish/obs-nvenc-test publish/obs-ffmpeg-mux 2>/dev/null || true
+    else
+        echo "note: packaging/linux/obs-helpers missing; NVENC and recording muxing will not work."
+    fi
+
     # Build a Velopack AppImage installer when the vpk CLI is available and we're on Linux.
     # (vpk's Linux packer only runs on Linux; install it with: dotnet tool install -g vpk)
     if $INSTALLER && command -v vpk >/dev/null 2>&1 && [[ "$(uname -s)" == "Linux" ]]; then
@@ -256,6 +261,10 @@ LAUNCHER
         echo ""
         echo "(No AppImage: install the Velopack CLI ('dotnet tool install -g vpk') and run this on Linux to produce an installer.)"
     fi
+
+    # This script only produces a runnable publish/ for local dev, not a distributable package.
+    echo ""
+    echo "=== For a distributable package, run: ./build-flatpak.sh ==="
 
     echo ""
     echo "=== Done! ==="

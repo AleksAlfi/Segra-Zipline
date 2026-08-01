@@ -19,9 +19,9 @@
       },
       "ObsKit.NET": {
         "type": "Direct",
-        "requested": "[1.5.0, )",
-        "resolved": "1.5.0",
-        "contentHash": "6mxnTB+FzdI2m9OwuJNb0BldZOIKCbWWVOp6gk8UQvtj9SZnS5ydfNobPDW0lYiJXagVztg0R+t2KW6X9+OPzA=="
+        "requested": "[1.5.4, )",
+        "resolved": "1.5.4",
+        "contentHash": "R4/sfPvP1MDj4VahPK/L9Twuao82apKXVKT+7zFEO15Kh8/r56x1swDXihR9zg0A6/q+/ap/t1s5ggYaQwb+2A=="
       },
       "Photino.NET": {
         "type": "Direct",
@@ -192,9 +192,9 @@
       },
       "ObsKit.NET": {
         "type": "Direct",
-        "requested": "[1.5.0, )",
-        "resolved": "1.5.0",
-        "contentHash": "6mxnTB+FzdI2m9OwuJNb0BldZOIKCbWWVOp6gk8UQvtj9SZnS5ydfNobPDW0lYiJXagVztg0R+t2KW6X9+OPzA=="
+        "requested": "[1.5.4, )",
+        "resolved": "1.5.4",
+        "contentHash": "R4/sfPvP1MDj4VahPK/L9Twuao82apKXVKT+7zFEO15Kh8/r56x1swDXihR9zg0A6/q+/ap/t1s5ggYaQwb+2A=="
       },
       "Photino.NET": {
         "type": "Direct",

@@ -46,6 +46,7 @@ import SegmentCard from '../Components/SegmentCard';
 import { useAudioTracks } from '../Hooks/useAudioTracks';
 import { AnimatePresence, motion } from 'framer-motion';
 import Button from '../Components/Button';
+import { useDeleteConfirmation } from '../Hooks/useDeleteConfirmation';
 
 const Crosshair2Dot = React.forwardRef<SVGSVGElement, React.ComponentProps<typeof Icon>>(
   (props, ref) => <Icon {...props} ref={ref} iconNode={crosshair2Dot} />,
@@ -197,6 +198,7 @@ export default function VideoComponent({ video }: { video: Content }) {
   const updateSettings = useSettingsUpdater();
   const { uploads } = useUploads();
   const { openModal, closeModal } = useModal();
+  const confirmDelete = useDeleteConfirmation();
   const {
     segments,
     addSegment,
@@ -1593,20 +1595,43 @@ export default function VideoComponent({ video }: { video: Content }) {
     const bookmarkIndex = video.bookmarks.findIndex((b) => b.id === bookmarkId);
 
     if (bookmarkIndex !== -1) {
-      // Remove the bookmark from the array
-      video.bookmarks.splice(bookmarkIndex, 1);
+      const bookmark = video.bookmarks[bookmarkIndex];
+      confirmDelete({
+        title: 'Delete bookmark?',
+        description: `Delete the ${bookmark.type.toLowerCase()} bookmark at ${bookmark.time}? This action cannot be undone.`,
+        onConfirm: () => {
+          video.bookmarks.splice(bookmarkIndex, 1);
 
-      // Force a re-render to update the UI
-      const bookmarks = [...video.bookmarks];
-      video.bookmarks = bookmarks;
+          const bookmarks = [...video.bookmarks];
+          video.bookmarks = bookmarks;
 
-      // Send message to backend to delete the bookmark
-      sendMessageToBackend('DeleteBookmark', {
-        FilePath: video.filePath,
-        ContentType: video.type,
-        Id: bookmarkId,
+          sendMessageToBackend('DeleteBookmark', {
+            FilePath: video.filePath,
+            ContentType: video.type,
+            Id: bookmarkId,
+          });
+        },
       });
     }
+  };
+
+  const handleDeleteSegment = (segmentId: number) => {
+    confirmDelete({
+      title: 'Delete segment?',
+      description: 'Remove this segment from the clip? This action cannot be undone.',
+      onConfirm: () => removeSegment(segmentId),
+    });
+  };
+
+  const handleClearSegments = () => {
+    if (segments.length === 0) return;
+
+    confirmDelete({
+      title: 'Delete all segments?',
+      description: `Remove all ${segments.length} ${segments.length === 1 ? 'segment' : 'segments'} from the clip? This action cannot be undone.`,
+      confirmText: 'Delete all',
+      onConfirm: clearAllSegments,
+    });
   };
 
   // Handle volume change
@@ -2041,7 +2066,7 @@ export default function VideoComponent({ video }: { video: Content }) {
                     onMouseDown={(e) => handleSegmentMouseDown(e, seg.id)}
                     onContextMenu={(e) => {
                       e.preventDefault();
-                      removeSegment(seg.id);
+                      handleDeleteSegment(seg.id);
                     }}
                   >
                     <div className="absolute left-0 top-0 h-full w-[4px] bg-accent/80 rounded-l-sm pointer-events-none" />
@@ -2449,7 +2474,7 @@ export default function VideoComponent({ video }: { video: Content }) {
                 variant="primary"
                 size="sm"
                 className="w-full h-10 py-0 hover:text-accent"
-                onClick={clearAllSegments}
+                onClick={handleClearSegments}
                 disabled={segments.length === 0}
               >
                 <Trash2 className="w-4 h-4" />
