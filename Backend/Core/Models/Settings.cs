@@ -1,6 +1,7 @@
 using Serilog;
 using Segra.Backend.App;
 using Segra.Backend.Core;
+using Segra.Backend.Platform;
 using System.Text.Json.Serialization;
 
 namespace Segra.Backend.Core.Models
@@ -82,6 +83,7 @@ namespace Segra.Backend.Core.Models
         private bool _inputNoiseSuppression = true;
         private string _videoQualityPreset = "high";
         private string _clipQualityPreset = "standard";
+        private bool _confirmBeforeDeleting = false;
         private bool _removeOriginalAfterCompression = false;
         private bool _discardSessionsWithoutBookmarks = false;
         private bool _disableWindowsGameMode = false;
@@ -133,11 +135,11 @@ namespace Segra.Backend.Core.Models
         private void SetDefaultResolution()
         {
             int screenHeight = 1080; // Fallback value
-            var primaryScreen = Screen.PrimaryScreen;
 
-            if (primaryScreen != null)
+            if (PlatformServices.Display != null &&
+                PlatformServices.Display.GetPrimaryMonitorPhysicalResolution(out _, out uint height) && height > 0)
             {
-                screenHeight = primaryScreen.Bounds.Height;
+                screenHeight = (int)height;
             }
 
             if (screenHeight >= 2160)
@@ -448,7 +450,7 @@ namespace Segra.Backend.Core.Models
                 if (_runOnStartup != value)
                 {
                     _runOnStartup = value;
-                    StartupService.SetStartupStatus(value);
+                    PlatformServices.Startup.SetStartupStatus(value);
                 }
             }
         }
@@ -878,6 +880,19 @@ namespace Segra.Backend.Core.Models
                 if (_clipQualityPreset != value)
                 {
                     _clipQualityPreset = value;
+                }
+            }
+        }
+
+        [JsonPropertyName("confirmBeforeDeleting")]
+        public bool ConfirmBeforeDeleting
+        {
+            get => _confirmBeforeDeleting;
+            set
+            {
+                if (_confirmBeforeDeleting != value)
+                {
+                    _confirmBeforeDeleting = value;
                 }
             }
         }

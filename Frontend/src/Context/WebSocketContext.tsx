@@ -16,8 +16,6 @@ interface WebSocketMessage {
 }
 
 export function WebSocketProvider({ children }: { children: ReactNode }) {
-  // Ref to track if we've already handled a version mismatch (prevent multiple reloads)
-  const versionCheckHandled = useRef(false);
   // Ref to track if this is a reconnection (not initial connection)
   const hasConnectedBefore = useRef(false);
 
@@ -46,34 +44,6 @@ export function WebSocketProvider({ children }: { children: ReactNode }) {
         const data: WebSocketMessage = JSON.parse(event.data);
         if (data.method !== 'RecordingPreviewFrame') {
           console.log('WebSocket message received:', data);
-        }
-
-        // Handle version check
-        if (data.method === 'AppVersion' && !versionCheckHandled.current) {
-          versionCheckHandled.current = true;
-          const backendVersion = data.content?.version;
-
-          if (backendVersion && backendVersion !== __APP_VERSION__) {
-            // A reload only helps when the served bundle actually matches the backend after
-            // an update. If we already reloaded once for this backend version and still
-            // mismatch (e.g. a build whose frontend version wasn't stamped), reloading
-            // again would loop forever.
-            if (localStorage.getItem('versionReloadAttempted') === backendVersion) {
-              console.warn(
-                `Version mismatch persists after reload (Backend ${backendVersion}, Frontend ${__APP_VERSION__}); not reloading again.`,
-              );
-              return;
-            }
-            console.log(
-              `Version mismatch: Backend ${backendVersion}, Frontend ${__APP_VERSION__}. Reloading...`,
-            );
-            localStorage.setItem('versionReloadAttempted', backendVersion);
-            // Store the old version before reloading
-            localStorage.setItem('oldAppVersion', __APP_VERSION__);
-            window.location.reload();
-            return;
-          }
-          localStorage.removeItem('versionReloadAttempted');
         }
 
         // Dispatch the message to all listeners

@@ -27,10 +27,6 @@ namespace Segra.Backend.Recorder
 
                 Log.Information($"Found {orphanedFiles.Count} orphaned video file(s) without metadata");
 
-                // AI game identification relied on Segra's cloud and was removed with the
-                // switch to a self-hosted Zipline backend; games are inferred from folder names only.
-                Dictionary<string, string>? aiIdentifiedGames = null;
-
                 var fileDataList = orphanedFiles.Select(orphanedFile =>
                 {
                     string recoveryId = Guid.NewGuid().ToString();
@@ -51,13 +47,7 @@ namespace Segra.Backend.Recorder
                         _ => orphanedFile.Type.ToString()
                     };
 
-                    // Use folder-derived game first, then AI as fallback
                     string? detectedGame = orphanedFile.FolderGame;
-                    if (string.IsNullOrEmpty(detectedGame) && aiIdentifiedGames != null && aiIdentifiedGames.TryGetValue(orphanedFile.FilePath, out string? aiGame))
-                    {
-                        detectedGame = aiGame;
-                    }
-
                     if (!string.IsNullOrEmpty(detectedGame))
                     {
                         _detectedGames[recoveryId] = detectedGame;

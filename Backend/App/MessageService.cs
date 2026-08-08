@@ -1,5 +1,6 @@
 using Serilog;
 using System.Net;
+using System.Reflection;
 using System.Text;
 using System.Text.Json;
 using Segra.Backend.Auth;
@@ -8,6 +9,7 @@ using System.Diagnostics;
 using Segra.Backend.Games;
 using Segra.Backend.Media;
 using Segra.Backend.Shared;
+using Segra.Backend.Platform;
 using System.Net.WebSockets;
 using Segra.Backend.Recorder;
 using Segra.Backend.Core.Models;
@@ -130,8 +132,7 @@ namespace Segra.Backend.App
                                 openFileLocationParameterElement.TryGetProperty("FilePath", out JsonElement filePathElement) &&
                                 filePathElement.ValueKind == JsonValueKind.String)
                             {
-                                string selectPath = filePathElement.GetString()!.Replace("/", "\\");
-                                Process.Start("explorer.exe", $"/select,\"{selectPath}\"");
+                                PlatformServices.Dialogs.OpenFileLocation(filePathElement.GetString()!);
                             }
                             else
                             {
@@ -145,14 +146,7 @@ namespace Segra.Backend.App
                                 string clipboardFilePath = copyFilePath.GetString()!;
                                 if (File.Exists(clipboardFilePath))
                                 {
-                                    var thread = new Thread(() =>
-                                    {
-                                        var files = new System.Collections.Specialized.StringCollection();
-                                        files.Add(clipboardFilePath);
-                                        System.Windows.Forms.Clipboard.SetFileDropList(files);
-                                    });
-                                    thread.SetApartmentState(ApartmentState.STA);
-                                    thread.Start();
+                                    PlatformServices.Dialogs.CopyFileToClipboard(clipboardFilePath);
                                 }
                                 else
                                 {
@@ -166,11 +160,7 @@ namespace Segra.Backend.App
                             {
                                 string url = urlElement.GetString()!;
                                 Log.Information($"Opening URL in browser: {url}");
-                                Process.Start(new ProcessStartInfo
-                                {
-                                    FileName = url,
-                                    UseShellExecute = true
-                                });
+                                PlatformServices.Dialogs.OpenUrl(url);
                             }
                             else
                             {
@@ -183,7 +173,7 @@ namespace Segra.Backend.App
                             string? logFilePath = Directory.GetFiles(logDir, "*.log").FirstOrDefault();
                             if (!string.IsNullOrEmpty(logFilePath))
                             {
-                                Process.Start("explorer.exe", $"/select,\"{logFilePath}\"");
+                                PlatformServices.Dialogs.OpenFileLocation(logFilePath);
                             }
                             else
                             {
@@ -205,6 +195,9 @@ namespace Segra.Backend.App
                         case "StopRecording":
                             _ = Task.Run(OBSService.StopRecording);
                             break;
+                        case "RefreshStorageStats":
+                            StorageService.UpdateRecordingDriveSpaceInState();
+                            break;
                         case "NewConnection":
                             Log.Information("NewConnection command received.");
                             await SendSettingsToFrontend("New connection");
@@ -213,16 +206,22 @@ namespace Segra.Backend.App
 
                             await SendGameList();
 
-                            if (UpdateService.UpdateManager.CurrentVersion != null)
-                            {
-                                string appVersion = UpdateService.UpdateManager.CurrentVersion.ToString();
+                            // canSelfUpdate: false on Linux/Flatpak, where the package manager owns updates.
+                            // Informational version, not GetName().Version: it keeps the -beta.N suffix,
+                            // which the frontend's What's New check needs on Flatpak (no Velopack metadata).
+                            string appVersion = UpdateService.UpdateManager.CurrentVersion?.ToString()
+                                ?? Assembly.GetExecutingAssembly().GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion
+                                ?? "0.0.0";
 
-                                // Send version to frontend to prevent mismatch
-                                await SendFrontendMessage("AppVersion", new
-                                {
-                                    version = appVersion
-                                });
-                            }
+                            await SendFrontendMessage("AppVersion", new
+                            {
+                                version = appVersion,
+#if WINDOWS
+                                canSelfUpdate = true,
+#else
+                                canSelfUpdate = false,
+#endif
+                            });
 
                             await UpdateService.SendCurrentUpdateProgressToFrontend();
                             _ = Task.Run(() => UpdateService.GetReleaseNotes());
@@ -451,63 +450,6 @@ namespace Segra.Backend.App
             }
         }
 
-        // Old frontends still target ws://localhost:5000/ from the previous port. Pushing AppVersion forces a reload via the version-mismatch path in WebSocketContext.tsx.
-        public static async Task StartLegacyPortFallback()
-        {
-            HttpListener listener = new HttpListener();
-            listener.Prefixes.Add("http://localhost:5000/");
-            try
-            {
-                listener.Start();
-            }
-            catch (Exception ex)
-            {
-                Log.Warning($"Legacy port 5000 fallback could not start: {ex.Message}");
-                return;
-            }
-            Log.Information("Legacy fallback listening on ws://localhost:5000/ (version-mismatch trigger only)");
-
-            while (true)
-            {
-                try
-                {
-                    HttpListenerContext context = await listener.GetContextAsync();
-                    if (!context.Request.IsWebSocketRequest)
-                    {
-                        context.Response.StatusCode = 400;
-                        context.Response.Close();
-                        continue;
-                    }
-
-                    HttpListenerWebSocketContext wsContext = await context.AcceptWebSocketAsync(null);
-                    WebSocket socket = wsContext.WebSocket;
-
-                    string version = UpdateService.UpdateManager.CurrentVersion?.ToString() ?? "0.0.0";
-                    var payload = new { method = "AppVersion", content = new { version } };
-                    byte[] buffer = JsonSerializer.SerializeToUtf8Bytes(payload, jsonOptions);
-
-                    try
-                    {
-                        await socket.SendAsync(buffer, WebSocketMessageType.Text, true, CancellationToken.None);
-                        await socket.CloseAsync(WebSocketCloseStatus.NormalClosure, "Port moved - reload", CancellationToken.None);
-                        Log.Information("Legacy port: pushed AppVersion to old frontend and closed.");
-                    }
-                    catch (Exception ex)
-                    {
-                        Log.Warning($"Legacy port send failed: {ex.Message}");
-                    }
-                    finally
-                    {
-                        socket.Dispose();
-                    }
-                }
-                catch (Exception ex)
-                {
-                    Log.Warning($"Legacy port loop error: {ex.Message}");
-                }
-            }
-        }
-
         public static async Task SendFrontendMessage(string method, object content)
         {
             await sendLock.WaitAsync();
@@ -692,58 +634,48 @@ namespace Segra.Backend.App
 
         private static async Task SetVideoLocationAsync()
         {
-            using (var fbd = new FolderBrowserDialog())
+            string? picked = await PlatformServices.Dialogs.PickFolderAsync("Select a folder to set as the video location.");
+            if (picked != null)
             {
-                fbd.Description = "Select a folder to set as the video location.";
-                fbd.RootFolder = Environment.SpecialFolder.Desktop;
+                string selectedPath = Shared.PathUtils.Normalize(picked);
+                Log.Information($"Selected Folder: {selectedPath}");
 
-                if (fbd.ShowDialog() == DialogResult.OK)
+                // Check if the new folder would exceed storage limit
+                bool shouldProceed = await StorageWarningService.CheckContentFolderChange(selectedPath);
+                if (shouldProceed)
                 {
-                    string selectedPath = Shared.PathUtils.Normalize(fbd.SelectedPath);
-                    Log.Information($"Selected Folder: {selectedPath}");
+                    Settings.Instance.ContentFolder = selectedPath;
 
-                    // Check if the new folder would exceed storage limit
-                    bool shouldProceed = await StorageWarningService.CheckContentFolderChange(selectedPath);
-                    if (shouldProceed)
-                    {
-                        Settings.Instance.ContentFolder = selectedPath;
-
-                        // Push the updated path to the frontend so the settings UI reflects the change
-                        await SendSettingsToFrontend("Content folder changed");
-                    }
-                    // If not proceeding, a warning modal was sent to the frontend
+                    // Push the updated path to the frontend so the settings UI reflects the change
+                    await SendSettingsToFrontend("Content folder changed");
                 }
-                else
-                {
-                    Log.Information("Folder selection was canceled.");
-                }
+                // If not proceeding, a warning modal was sent to the frontend
+            }
+            else
+            {
+                Log.Information("Folder selection was canceled.");
             }
         }
 
         private static async Task SetCacheLocationAsync()
         {
-            using (var fbd = new FolderBrowserDialog())
+            string? picked = await PlatformServices.Dialogs.PickFolderAsync("Select a folder for metadata, thumbnails, and waveforms.");
+            if (picked != null)
             {
-                fbd.Description = "Select a folder for metadata, thumbnails, and waveforms.";
-                fbd.RootFolder = Environment.SpecialFolder.Desktop;
+                string selectedPath = Shared.PathUtils.Normalize(picked);
+                string oldCacheFolder = Settings.Instance.CacheFolder;
+                Log.Information($"Selected Cache Folder: {selectedPath}");
 
-                if (fbd.ShowDialog() == DialogResult.OK)
-                {
-                    string selectedPath = Shared.PathUtils.Normalize(fbd.SelectedPath);
-                    string oldCacheFolder = Settings.Instance.CacheFolder;
-                    Log.Information($"Selected Cache Folder: {selectedPath}");
+                Settings.Instance.CacheFolder = selectedPath;
+                SettingsService.SaveSettings();
 
-                    Settings.Instance.CacheFolder = selectedPath;
-                    SettingsService.SaveSettings();
+                await SettingsService.MigrateCacheFolder(oldCacheFolder, selectedPath);
 
-                    await SettingsService.MigrateCacheFolder(oldCacheFolder, selectedPath);
-
-                    await SendSettingsToFrontend("Cache folder changed");
-                }
-                else
-                {
-                    Log.Information("Cache folder selection was canceled.");
-                }
+                await SendSettingsToFrontend("Cache folder changed");
+            }
+            else
+            {
+                Log.Information("Cache folder selection was canceled.");
             }
         }
 
@@ -795,32 +727,23 @@ namespace Segra.Backend.App
         {
             try
             {
-                var openFileDialog = new OpenFileDialog
-                {
-                    Filter = "Executable Files (*.exe)|*.exe",
-                    Title = "Select Game Executable",
-                    CheckFileExists = true,
-                    CheckPathExists = true,
-                    Multiselect = false,
-                    // Keep the process working directory pinned to the app directory.
-                    RestoreDirectory = true
-                };
+                string? pickedFile = await PlatformServices.Dialogs.PickFileAsync("Select Game Executable", "Executable Files (*.exe)", "exe");
 
-                if (openFileDialog.ShowDialog() == DialogResult.OK)
+                if (pickedFile != null)
                 {
-                    string filePath = Shared.PathUtils.Normalize(openFileDialog.FileName);
+                    string filePath = Shared.PathUtils.Normalize(pickedFile);
                     string fileName = Path.GetFileNameWithoutExtension(filePath);
 
                     // If the selected exe is a known catalog game, link it (catalog name + igdb id + CDN
                     // icon) so it behaves exactly like adding from search; otherwise treat it as a custom
                     // game and extract the exe's own icon.
-                    string? catalogName = GameUtils.GetGameNameFromExePath(openFileDialog.FileName);
-                    int? igdbId = GameUtils.GetIgdbIdFromExePath(openFileDialog.FileName);
-                    string? catalogIcon = GameUtils.GetIconFromExePath(openFileDialog.FileName);
+                    string? catalogName = GameUtils.GetGameNameFromExePath(pickedFile);
+                    int? igdbId = GameUtils.GetIgdbIdFromExePath(pickedFile);
+                    string? catalogIcon = GameUtils.GetIconFromExePath(pickedFile);
                     // Fall back to the exe's own icon whenever the catalog has no icon for it (even for a
                     // known game), so the entry always has the best icon available.
                     string? customIcon = catalogIcon == null
-                        ? Shared.IconUtils.ExtractExeIconBase64(openFileDialog.FileName)
+                        ? Shared.IconUtils.ExtractExeIconBase64(pickedFile)
                         : null;
 
                     var gameObject = new

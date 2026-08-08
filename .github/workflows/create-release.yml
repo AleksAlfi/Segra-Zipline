@@ -114,7 +114,7 @@ jobs:
           if ($restoreJob.State -ne 'Completed') { throw "dotnet restore job failed (state: $($restoreJob.State))" }
 
       - name: Publish the App
-        run: dotnet publish -c Release --self-contained -r win-x64 -o publish --no-restore -p:Version=${{ steps.extract_final_version.outputs.final_version_number }}
+        run: dotnet publish -c Release -f net10.0-windows10.0.19041.0 --self-contained -r win-x64 -o publish --no-restore -p:Version=${{ steps.extract_final_version.outputs.final_version_number }}
         shell: pwsh
 
       - name: Upload Segra binaries for signing (Pass 1)
@@ -258,15 +258,25 @@ jobs:
           retention-days: 1
 
   create_github_release:
-    needs: build_and_release
+    # Wait for both builds, but publish as long as the Windows build succeeded (the Linux job is
+    # continue-on-error, so a Linux failure can't block the Windows release).
+    needs: [build_and_release, build_linux]
+    if: ${{ !cancelled() && needs.build_and_release.result == 'success' }}
     runs-on: ubuntu-latest
     permissions:
       contents: write # Required to create a release
     steps:
-      - name: Download Final Build Artifact
+      - name: Download Final Build Artifact (Windows)
         uses: actions/download-artifact@v8
         with:
           name: Segra-Final-Build
+
+      - name: Download Linux Build Artifact
+        uses: actions/download-artifact@v8
+        continue-on-error: true
+        with:
+          name: Segra-Linux
+          path: linux
 
       - name: Create Final GitHub Release
         uses: softprops/action-gh-release@v3
@@ -281,6 +291,63 @@ jobs:
             ./releases.win.json
             ./assets.win.json
             ./Segra-${{ needs.build_and_release.outputs.final_version_number }}-full.nupkg
+            ./linux/Segra.flatpak
+            ./linux/segra-*-x86_64.tar.gz
+            ./linux/segra-*-x86_64.tar.gz.sha256
+
+  # Linux Flatpak, built in parallel with Windows; continue-on-error so it never blocks the release.
+  build_linux:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - name: Compute final version from the prerelease tag
+        id: ver
+        run: |
+          rc='${{ github.event.inputs.rc_tag }}'
+          num=$(echo "$rc" | sed -E 's/-(rc|beta)\.[0-9]+$//' | sed 's/^v//')
+          echo "num=$num" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout Code at Prerelease Tag
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.inputs.rc_tag }}
+          submodules: recursive
+
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Setup Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install Flatpak toolchain + OBS media deps
+        # OBS's media libs (FFmpeg 6, x264, jansson, rist, srt, mbedtls) so build-flatpak.sh can bundle its ldd closure.
+        # obs-ffmpeg.so links the openssl srt variant, obs-outputs.so needs all three mbedtls libs,
+        # and libobs-scripting needs luajit.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y flatpak flatpak-builder \
+            ffmpeg libavcodec-extra libx264-164 libjansson4 librist4 libsrt1.5-gnutls \
+            libsrt1.5-openssl libmbedtls14t64 libmbedx509-1t64 libmbedcrypto7t64 libluajit-5.1-2
+          flatpak remote-add --if-not-exists --user flathub https://flathub.org/repo/flathub.flatpakrepo
+
+      - name: Build Flatpak (OBS bundled)
+        run: SEGRA_VERSION=${{ steps.ver.outputs.num }} ./build-flatpak.sh
+
+      - name: Upload Linux build artifact
+        # The tarball + sha256 feed the Flathub manifest; the .flatpak bundle is for direct installs.
+        uses: actions/upload-artifact@v7
+        with:
+          name: Segra-Linux
+          path: |
+            ./output/Segra.flatpak
+            ./output/segra-*-x86_64.tar.gz
+            ./output/segra-*-x86_64.tar.gz.sha256
+          if-no-files-found: error
+          retention-days: 1
 
   # Separate, non-blocking job so the release job goes green without waiting on VirusTotal.
   virustotal:

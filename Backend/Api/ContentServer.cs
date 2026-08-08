@@ -9,6 +9,8 @@ namespace Segra.Backend.Api
 {
     internal class ContentServer
     {
+        internal const string Prefix = "http://localhost:2222/";
+
         private static readonly HttpListener _httpListener = new();
         private static CancellationTokenSource? _cancellationTokenSource;
 
@@ -104,7 +106,8 @@ namespace Segra.Backend.Api
             }
             catch (Exception ex)
             {
-                Log.Error(ex, "Error processing request for {Url}", context.Request.RawUrl);
+                // Path only: auth callback query strings carry session tokens.
+                Log.Error(ex, "Error processing request for {Path}", context.Request.Url?.AbsolutePath);
                 try
                 {
                     if (!response.OutputStream.CanWrite)
