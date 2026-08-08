@@ -234,6 +234,29 @@ namespace Segra.Backend.Platform.Linux
             }
         }
 
+        public async Task<string?> GetClipboardTextAsync()
+        {
+            try
+            {
+                const string xclipArgs = "-selection clipboard -o";
+                var psi = FlatpakHost.IsFlatpak
+                    ? new ProcessStartInfo("flatpak-spawn", $"--host {FlatpakHost.DirectoryArg} xclip {xclipArgs}")
+                    : new ProcessStartInfo("xclip", xclipArgs);
+                psi.RedirectStandardOutput = true;
+                psi.UseShellExecute = false;
+                using var proc = Process.Start(psi);
+                if (proc == null)
+                    return null;
+                string output = await proc.StandardOutput.ReadToEndAsync();
+                await proc.WaitForExitAsync();
+                return proc.ExitCode == 0 ? output : null;
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
         private static string Escape(string s) => s.Replace("\"", "\\\"");
     }
 

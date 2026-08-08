@@ -22,9 +22,12 @@ interface AuthContextType {
   authError: string | null;
   totpRequired: boolean;
   isAuthenticating: boolean;
+  isWaitingForDiscord: boolean;
   clearAuthError: () => void;
   loginWithPassword: (serverUrl: string, username: string, password: string, code?: string) => void;
   loginWithToken: (serverUrl: string, apiToken: string) => void;
+  loginWithDiscord: (serverUrl: string) => void;
+  cancelDiscordLogin: () => void;
   signOut: () => void;
 }
 
@@ -35,6 +38,7 @@ interface AuthStateMessage {
   avatar?: string | null;
   error?: string | null;
   totpRequired?: boolean;
+  discordPending?: boolean;
   defaultServerUrl?: string | null;
 }
 
@@ -56,6 +60,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [authError, setAuthError] = useState<string | null>(null);
   const [totpRequired, setTotpRequired] = useState(false);
   const [isAuthenticating, setIsAuthenticating] = useState(false);
+  const [isWaitingForDiscord, setIsWaitingForDiscord] = useState(false);
   const loginTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const clearLoginTimeout = useCallback(() => {
@@ -80,6 +85,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const state = content as AuthStateMessage;
       clearLoginTimeout();
       setIsAuthenticating(false);
+      setIsWaitingForDiscord(!!state.discordPending);
       setTotpRequired(!!state.totpRequired);
       setAuthError(state.error ?? null);
       setDefaultServerUrl(state.defaultServerUrl || null);
@@ -128,6 +134,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     [startLogin],
   );
 
+  const loginWithDiscord = useCallback(
+    (server: string) => {
+      startLogin();
+      sendMessageToBackend('LoginWithDiscord', { serverUrl: server });
+    },
+    [startLogin],
+  );
+
+  const cancelDiscordLogin = useCallback(() => {
+    setIsWaitingForDiscord(false);
+    sendMessageToBackend('CancelDiscordLogin');
+  }, []);
+
   const signOut = useCallback(() => {
     clearLoginTimeout();
     setUser(null);
@@ -146,9 +165,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     authError,
     totpRequired,
     isAuthenticating,
+    isWaitingForDiscord,
     clearAuthError: () => setAuthError(null),
     loginWithPassword,
     loginWithToken,
+    loginWithDiscord,
+    cancelDiscordLogin,
     signOut,
   };
 
