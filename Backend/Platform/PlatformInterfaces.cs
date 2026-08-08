@@ -44,7 +44,6 @@ namespace Segra.Backend.Platform
         void OpenFileLocation(string filePath);
         void OpenUrl(string url);
         void CopyFileToClipboard(string filePath);
-        Task<string?> GetClipboardTextAsync();
     }
 
     /// <summary>Manages launch-on-startup registration.</summary>

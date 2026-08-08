@@ -170,9 +170,6 @@ namespace Segra.Backend.Platform.Windows
             thread.Start();
         }
 
-        public Task<string?> GetClipboardTextAsync() =>
-            RunSta<string?>(() => Clipboard.ContainsText() ? Clipboard.GetText() : null);
-
         // WinForms dialogs and clipboard require an STA thread.
         private static Task<T> RunSta<T>(Func<T> func)
         {

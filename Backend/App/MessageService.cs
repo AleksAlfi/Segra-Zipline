@@ -82,13 +82,6 @@ namespace Segra.Backend.App
                         case "Logout":
                             _ = Task.Run(AuthService.HandleLogout);
                             break;
-                        case "LoginWithDiscord":
-                            root.TryGetProperty("Parameters", out JsonElement discordParameterElement);
-                            _ = Task.Run(() => AuthService.HandleDiscordLogin(discordParameterElement));
-                            break;
-                        case "CancelDiscordLogin":
-                            AuthService.CancelDiscordLogin();
-                            break;
                         case "CancelClip":
                             if (root.TryGetProperty("Parameters", out var cancelClipParams) &&
                                 cancelClipParams.TryGetProperty("id", out var clipId))
