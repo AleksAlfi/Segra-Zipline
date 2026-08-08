@@ -10,6 +10,7 @@ export type StartupWindowMode = 'Normal' | 'Minimized';
 export type CloseButtonAction = 'Minimize' | 'Exit';
 
 export interface Content {
+  id: string;
   type: ContentType;
   title: string;
   game: string;
@@ -23,6 +24,7 @@ export interface Content {
   uploadId?: string;
   igdbId?: number;
   isImported: boolean;
+  compressed: boolean;
   audioTrackNames?: string[];
 }
 
@@ -436,6 +438,7 @@ export const initialSettings: Settings = {
 
 export interface Segment {
   id: number;
+  contentId: string;
   type: ContentType;
   startTime: number;
   endTime: number;

@@ -1153,6 +1153,7 @@ export default function VideoComponent({ video }: { video: Content }) {
 
     const newSegment: Segment = {
       id: Date.now(),
+      contentId: video.id,
       type: video.type,
       startTime: start,
       endTime: end,
@@ -1191,14 +1192,9 @@ export default function VideoComponent({ video }: { video: Content }) {
       OutputMode: clipOutputMode,
       Segments: segments.map((s) => ({
         id: s.id,
-        type: s.type,
-        fileName: s.fileName,
-        filePath: s.filePath,
-        game: s.game,
-        title: s.title,
+        contentId: s.contentId,
         startTime: s.startTime,
         endTime: s.endTime,
-        igdbId: s.igdbId,
         mutedAudioTracks: s.mutedAudioTracks,
         audioTrackVolumes: s.audioTrackVolumes,
       })),
@@ -1483,7 +1479,7 @@ export default function VideoComponent({ video }: { video: Content }) {
           : video.type === 'Clip'
             ? 'Clips'
             : 'Highlights';
-    const waveformPath = `${appState.cacheFolder}/waveforms/${folderName}/${video.fileName}.peaks.json`;
+    const waveformPath = `${appState.cacheFolder}/waveforms/${folderName}/${video.id}.peaks.json`;
     return `http://localhost:2222/api/content?input=${encodeURIComponent(waveformPath)}&type=${video.type.toLowerCase()}`;
   };
 
@@ -1501,7 +1497,7 @@ export default function VideoComponent({ video }: { video: Content }) {
         onClose={closeModal}
         onUpload={(title) => {
           sendMessageToBackend('UploadContent', {
-            FilePath: video.filePath,
+            Id: video.id,
             Title: title,
           });
         }}
@@ -1582,10 +1578,9 @@ export default function VideoComponent({ video }: { video: Content }) {
 
     // Send message to backend to add bookmark
     sendMessageToBackend('AddBookmark', {
-      FilePath: video.filePath,
+      ContentId: video.id,
       Type: bookmarkType,
       Time: formattedTime,
-      ContentType: video.type,
       Id: bookmarkId,
     });
   };
@@ -1606,8 +1601,7 @@ export default function VideoComponent({ video }: { video: Content }) {
           video.bookmarks = bookmarks;
 
           sendMessageToBackend('DeleteBookmark', {
-            FilePath: video.filePath,
-            ContentType: video.type,
+            ContentId: video.id,
             Id: bookmarkId,
           });
         },

@@ -1,6 +1,6 @@
 import { useMemo, useRef, useState, useEffect, useLayoutEffect, useCallback } from 'react';
 import { useSettings } from '../Context/SettingsContext';
-import { useAppState } from '../Context/AppStateContext';
+import { useAppState, usePatchContent } from '../Context/AppStateContext';
 import { BookmarkType, Content, includeInHighlight } from '../Models/types';
 import { sendMessageToBackend } from '../Utils/MessageUtils';
 import { openFileLocation } from '../Utils/FileUtils';
@@ -60,6 +60,7 @@ export default function ContentCard({
 }: VideoCardProps) {
   const { enableAi, showNewBadgeOnVideos, airplaneMode } = useSettings();
   const { cacheFolder, content: allContent } = useAppState();
+  const patchContent = usePatchContent();
   const { openModal, closeModal } = useModal();
   const { aiProgress } = useAiHighlights();
   const { compressionProgress, isCompressing } = useCompression();
@@ -71,15 +72,21 @@ export default function ContentCard({
     : undefined;
 
   const dropdownRef = useRef<HTMLDivElement>(null);
+  const dropdownTriggerRef = useRef<HTMLLabelElement>(null);
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
   const [copied, setCopied] = useState(false);
   const [opened, setOpened] = useState(false);
   const [isRenaming, setIsRenaming] = useState(false);
   const [renameValue, setRenameValue] = useState('');
+  const [contextMenuPosition, setContextMenuPosition] = useState<{
+    x: number;
+    y: number;
+  } | null>(null);
   const renameInputRef = useRef<HTMLInputElement>(null);
+  const uploadModalSequenceRef = useRef(0);
 
   const thumbnailRef = useRef<HTMLImageElement>(null);
-  const thumbnailKey = `${type}:${content?.fileName ?? ''}`;
+  const thumbnailKey = `${type}:${content?.id ?? ''}`;
   const isNewContent =
     hasSeededKnownContent && content != null && !knownContentKeys.has(thumbnailKey);
 
@@ -91,11 +98,11 @@ export default function ContentCard({
   // Seed the known set on the first populated list; record each card on mount so it stays "known".
   useEffect(() => {
     if (!hasSeededKnownContent && allContent.length > 0) {
-      for (const item of allContent) knownContentKeys.add(`${item.type}:${item.fileName}`);
+      for (const item of allContent) knownContentKeys.add(`${item.type}:${item.id}`);
       hasSeededKnownContent = true;
     }
-    if (content?.fileName) knownContentKeys.add(thumbnailKey);
-  }, [allContent, thumbnailKey, content?.fileName]);
+    if (content?.id) knownContentKeys.add(thumbnailKey);
+  }, [allContent, thumbnailKey, content?.id]);
 
   const markThumbnailLoaded = useCallback(() => {
     loadedThumbnailKeys.add(thumbnailKey);
@@ -210,7 +217,7 @@ export default function ContentCard({
           : type === 'Clip'
             ? 'Clips'
             : 'Highlights';
-    const thumbnailPath = `${cacheFolder}/thumbnails/${folderName}/${content?.fileName}.jpeg`;
+    const thumbnailPath = `${cacheFolder}/thumbnails/${folderName}/${content?.id}.jpeg`;
     return `http://localhost:2222/api/thumbnail?input=${encodeURIComponent(thumbnailPath)}`;
   };
 
@@ -241,7 +248,7 @@ export default function ContentCard({
     // Check if this content has been viewed already
     const viewedContent = localStorage.getItem('viewed-content') || '{}';
     const viewedContentObj = JSON.parse(viewedContent);
-    if (viewedContentObj[content.fileName]) {
+    if (viewedContentObj[content.id]) {
       return false;
     }
 
@@ -249,26 +256,27 @@ export default function ContentCard({
     const now = new Date();
     const diffInHours = (now.getTime() - createdAt.getTime()) / (1000 * 60 * 60);
     return diffInHours <= 1;
-  }, [content?.fileName, content?.createdAt]);
+  }, [content?.id, content?.createdAt]);
 
   const markAsViewed = () => {
     if (!content) return;
 
     const viewedContent = localStorage.getItem('viewed-content') || '{}';
     const viewedContentObj = JSON.parse(viewedContent);
-    viewedContentObj[content.fileName] = true;
+    viewedContentObj[content.id] = true;
     localStorage.setItem('viewed-content', JSON.stringify(viewedContentObj));
   };
 
   const handleUpload = () => {
+    uploadModalSequenceRef.current += 1;
     openModal(
       <UploadModal
-        key={`${Math.random()}`}
+        key={`${content!.fileName}-${uploadModalSequenceRef.current}`}
         video={content!}
         onClose={closeModal}
         onUpload={(title) => {
           sendMessageToBackend('UploadContent', {
-            FilePath: content!.filePath,
+            Id: content!.id,
             Title: title,
           });
         }}
@@ -278,16 +286,15 @@ export default function ContentCard({
 
   const handleCreateAiClip = () => {
     const parameters: any = {
-      FileName: content!.fileName,
+      Id: content!.id,
     };
 
     sendMessageToBackend('CreateAiClip', parameters);
   };
 
   const handleDelete = () => {
-    const parameters: any = {
-      FileName: content!.fileName,
-      ContentType: type,
+    const parameters = {
+      Id: content!.id,
     };
 
     const displayName = content!.title || content!.game || content!.fileName;
@@ -320,23 +327,187 @@ export default function ContentCard({
     const invalidChars = /[<>:"/\\|?*]/;
     if (trimmed && invalidChars.test(trimmed)) return;
     sendMessageToBackend('RenameContent', {
-      FileName: content!.fileName,
-      ContentType: type,
+      Id: content!.id,
       Title: trimmed,
     });
+    // Show the new title immediately; the backend's State push confirms it.
+    patchContent(content!.id, { title: trimmed });
   };
 
   const handleOpenFileLocation = () => openFileLocation(content!.filePath);
 
+  useEffect(() => {
+    if (!contextMenuPosition) return;
+
+    const closeContextMenu = () => setContextMenuPosition(null);
+    window.addEventListener('click', closeContextMenu);
+    window.addEventListener('blur', closeContextMenu);
+    window.addEventListener('resize', closeContextMenu);
+    window.addEventListener('scroll', closeContextMenu, true);
+
+    return () => {
+      window.removeEventListener('click', closeContextMenu);
+      window.removeEventListener('blur', closeContextMenu);
+      window.removeEventListener('resize', closeContextMenu);
+      window.removeEventListener('scroll', closeContextMenu, true);
+    };
+  }, [contextMenuPosition]);
+
+  useEffect(() => {
+    const closeContextMenu = () => setContextMenuPosition(null);
+    window.addEventListener('segra:close-content-context-menus', closeContextMenu);
+
+    return () => {
+      window.removeEventListener('segra:close-content-context-menus', closeContextMenu);
+    };
+  }, []);
+
+  const openContextMenu = (event: React.MouseEvent) => {
+    if (isBeingCompressed) return;
+
+    event.preventDefault();
+    event.stopPropagation();
+    (document.activeElement as HTMLElement | null)?.blur();
+    window.dispatchEvent(new Event('segra:close-content-context-menus'));
+
+    const menuWidth = 208;
+    const actionCount =
+      3 +
+      (!airplaneMode && (type === 'Clip' || type === 'Highlight') ? 1 : 0) +
+      (type === 'Clip' || type === 'Highlight' || type === 'Buffer' ? 1 : 0) +
+      (type === 'Session' && enableAi ? 1 : 0) +
+      ((type === 'Clip' || type === 'Highlight') && !content?.compressed ? 1 : 0);
+    const menuHeight = actionCount * 40 + 16;
+    setContextMenuPosition({
+      x: Math.max(8, Math.min(event.clientX, window.innerWidth - menuWidth - 8)),
+      y: Math.max(8, Math.min(event.clientY, window.innerHeight - menuHeight - 8)),
+    });
+  };
+
+  const hasHighlightBookmarks = content?.bookmarks?.some((bookmark) =>
+    includeInHighlight(bookmark.type),
+  );
+  const isCreatingHighlight = Object.values(aiProgress).some(
+    (progress) => progress.content.id === content?.id && progress.status === 'processing',
+  );
+
+  const renderMenuItems = (closeMenu: () => void) => (
+    <>
+      {!airplaneMode && (type === 'Clip' || type === 'Highlight') && (
+        <li>
+          <Button
+            variant="menuPrimary"
+            onClick={() => {
+              closeMenu();
+              handleUpload();
+            }}
+          >
+            <Upload size={20} />
+            <span>Upload</span>
+          </Button>
+        </li>
+      )}
+      {(type === 'Clip' || type === 'Highlight' || type === 'Buffer') && (
+        <li>
+          <Button
+            variant="menu"
+            onClick={() => {
+              closeMenu();
+              sendMessageToBackend('CopyFileToClipboard', {
+                FilePath: content!.filePath,
+              });
+            }}
+          >
+            <Copy size={20} />
+            <span>Copy</span>
+          </Button>
+        </li>
+      )}
+      {type === 'Session' && enableAi && (
+        <li>
+          <Button
+            variant="menuPurple"
+            disabled={!hasHighlightBookmarks || isCreatingHighlight}
+            onClick={() => {
+              if (!hasHighlightBookmarks || isCreatingHighlight) return;
+              closeMenu();
+              handleCreateAiClip();
+            }}
+          >
+            <Crown size={20} />
+            <span>
+              {isCreatingHighlight
+                ? 'Creating Highlight...'
+                : hasHighlightBookmarks
+                  ? 'Create Highlight'
+                  : 'No Highlights'}
+            </span>
+          </Button>
+        </li>
+      )}
+      <li>
+        <Button
+          variant="menu"
+          onClick={() => {
+            closeMenu();
+            startRenaming();
+          }}
+        >
+          <PenLine size={20} />
+          <span>Rename</span>
+        </Button>
+      </li>
+      <li>
+        <Button
+          variant="menu"
+          onClick={() => {
+            closeMenu();
+            handleOpenFileLocation();
+          }}
+        >
+          <FolderOpen size={20} />
+          <span>Open File Location</span>
+        </Button>
+      </li>
+      {(type === 'Clip' || type === 'Highlight') && !content?.compressed && (
+        <li>
+          <Button
+            variant="menu"
+            onClick={() => {
+              closeMenu();
+              sendMessageToBackend('CompressVideo', { Id: content!.id });
+            }}
+          >
+            <Minimize2 size={20} />
+            <span>Compress</span>
+          </Button>
+        </li>
+      )}
+      <li>
+        <Button
+          variant="menuDanger"
+          onClick={() => {
+            closeMenu();
+            handleDelete();
+          }}
+        >
+          <Trash2 size={20} />
+          <span>Delete</span>
+        </Button>
+      </li>
+    </>
+  );
+
   return (
     <div
-      data-content-filename={content!.fileName}
+      data-content-id={content!.id}
       className={`card card-compact bg-base-300 text-gray-300 w-full border border-[#49515b] ${isSelected ? '!outline !outline-1 !outline-primary' : ''} ${isHighlighted ? 'import-pulse' : ''} ${isBeingCompressed ? 'cursor-default opacity-75' : 'cursor-pointer'} ${isSelectionMode ? 'select-none' : ''}`}
       onClick={() => {
         if (isBeingCompressed) return;
         if (!isSelectionMode) markAsViewed();
         onClick?.(content!);
       }}
+      onContextMenu={openContextMenu}
     >
       <figure className="relative aspect-video bg-black">
         {/* Shimmer crossfades out as the image fades in, so the figure never flashes black. */}
@@ -437,7 +608,13 @@ export default function ContentCard({
             ref={dropdownRef}
             className={`dropdown dropdown-end ${isBeingCompressed ? 'pointer-events-none opacity-50' : ''}`}
             onClick={(e) => e.stopPropagation()}
+            onContextMenu={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              dropdownTriggerRef.current?.focus();
+            }}
             onFocus={() => {
+              window.dispatchEvent(new Event('segra:close-content-context-menus'));
               updateDropdownPosition();
               setIsDropdownOpen(true);
             }}
@@ -449,6 +626,7 @@ export default function ContentCard({
             }}
           >
             <label
+              ref={dropdownTriggerRef}
               tabIndex={isBeingCompressed ? -1 : 0}
               className="btn btn-ghost btn-sm btn-circle hover:bg-white/10 active:bg-white/10"
             >
@@ -458,124 +636,7 @@ export default function ContentCard({
               tabIndex={0}
               className="dropdown-content menu bg-base-300 border border-base-400 rounded-box z-999 w-52 p-2"
             >
-              {!airplaneMode && (type === 'Clip' || type === 'Highlight') && (
-                <li>
-                  <Button
-                    variant="menuPrimary"
-                    onClick={() => {
-                      (document.activeElement as HTMLElement).blur();
-                      handleUpload();
-                    }}
-                  >
-                    <Upload size={20} />
-                    <span>Upload</span>
-                  </Button>
-                </li>
-              )}
-              {(type === 'Clip' || type === 'Highlight' || type === 'Buffer') && (
-                <li>
-                  <Button
-                    variant="menu"
-                    onClick={() => {
-                      (document.activeElement as HTMLElement).blur();
-                      sendMessageToBackend('CopyFileToClipboard', {
-                        FilePath: content!.filePath,
-                      });
-                    }}
-                  >
-                    <Copy size={20} />
-                    <span>Copy</span>
-                  </Button>
-                </li>
-              )}
-              {type === 'Session' && enableAi && (
-                <li>
-                  {(() => {
-                    const hasHighlightBookmarks = content?.bookmarks?.some((b) =>
-                      includeInHighlight(b.type),
-                    );
-                    const isProcessing = Object.values(aiProgress).some(
-                      (progress) =>
-                        progress.content.fileName === content?.fileName &&
-                        progress.status === 'processing',
-                    );
-                    const isDisabled = !hasHighlightBookmarks || isProcessing;
-
-                    return (
-                      <Button
-                        variant="menuPurple"
-                        disabled={isDisabled}
-                        onClick={() => {
-                          if (hasHighlightBookmarks && !isProcessing) {
-                            (document.activeElement as HTMLElement).blur();
-                            handleCreateAiClip();
-                          }
-                        }}
-                      >
-                        <Crown size={20} />
-                        <span>
-                          {isProcessing
-                            ? 'Creating Highlight...'
-                            : hasHighlightBookmarks
-                              ? 'Create Highlight'
-                              : 'No Highlights'}
-                        </span>
-                      </Button>
-                    );
-                  })()}
-                </li>
-              )}
-              <li>
-                <Button
-                  variant="menu"
-                  onClick={() => {
-                    (document.activeElement as HTMLElement).blur();
-                    startRenaming();
-                  }}
-                >
-                  <PenLine size={20} />
-                  <span>Rename</span>
-                </Button>
-              </li>
-              <li>
-                <Button
-                  variant="menu"
-                  onClick={() => {
-                    (document.activeElement as HTMLElement).blur();
-                    handleOpenFileLocation();
-                  }}
-                >
-                  <FolderOpen size={20} />
-                  <span>Open File Location</span>
-                </Button>
-              </li>
-              {(type === 'Clip' || type === 'Highlight') &&
-                !content?.fileName?.endsWith('_compressed') && (
-                  <li>
-                    <Button
-                      variant="menu"
-                      onClick={() => {
-                        (document.activeElement as HTMLElement).blur();
-                        sendMessageToBackend('CompressVideo', { FilePath: content!.filePath });
-                      }}
-                    >
-                      <Minimize2 size={20} />
-                      <span>Compress</span>
-                    </Button>
-                  </li>
-                )}
-              <li>
-                <Button
-                  variant="menuDanger"
-                  onClick={() => {
-                    (document.activeElement as HTMLElement).blur();
-                    handleDelete();
-                  }}
-                >
-                  <Trash2 size={20} />
-                  <span>Delete</span>
-                </Button>
-              </li>
+              {renderMenuItems(() => (document.activeElement as HTMLElement).blur())}
             </ul>
           </div>
         </div>
@@ -631,6 +692,16 @@ export default function ContentCard({
           )}
         </div>
       </div>
+
+      {contextMenuPosition && (
+        <ul
+          className="menu fixed z-1000 w-52 rounded-box border border-base-400 bg-base-300 p-2 shadow-xl"
+          style={{ left: contextMenuPosition.x, top: contextMenuPosition.y }}
+          onClick={(event) => event.stopPropagation()}
+        >
+          {renderMenuItems(() => setContextMenuPosition(null))}
+        </ul>
+      )}
     </div>
   );
 }

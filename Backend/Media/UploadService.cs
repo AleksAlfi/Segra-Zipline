@@ -47,13 +47,22 @@ namespace Segra.Backend.Media
 
             try
             {
-                string filePath = message.GetProperty("FilePath").GetString()!;
-                fileName = Path.GetFileName(filePath);
-                string fileNameWithoutExtension = Path.GetFileNameWithoutExtension(fileName);
+                string id = message.GetProperty("Id").GetString()!;
                 title = message.GetProperty("Title").GetString()!;
 
                 if (!AuthService.IsAuthenticated())
                     throw new Exception("Not connected to a Zipline server. Connect in Settings > Account first.");
+
+                Content? content = AppState.Instance.Content.FirstOrDefault(c => c.Id == id);
+
+                if (content == null)
+                {
+                    Log.Error($"Content not found in state for upload: {id}");
+                    return;
+                }
+
+                string filePath = content.FilePath;
+                fileName = Path.GetFileName(filePath);
 
                 cts = new CancellationTokenSource();
                 lock (_uploadLock)
@@ -120,9 +129,7 @@ namespace Segra.Backend.Media
                 request.Headers.TryAddWithoutValidation("Authorization", AuthService.ApiToken);
                 request.Headers.TryAddWithoutValidation("x-zipline-original-name", "true");
 
-                var uploadContent = AppState.Instance.Content.FirstOrDefault(c =>
-                    Path.GetFileNameWithoutExtension(c.FileName) == fileNameWithoutExtension);
-                string? folderId = await GetUploadFolderIdAsync(uploadContent?.Game, cts.Token);
+                string? folderId = await GetUploadFolderIdAsync(content.Game, cts.Token);
                 if (folderId != null)
                     request.Headers.TryAddWithoutValidation("x-zipline-folder", folderId);
 
@@ -171,12 +178,8 @@ namespace Segra.Backend.Media
                                 string uploadId = url;
                                 Log.Information($"Zipline share URL: {url}");
 
-                                // Update the content with the uploadId
-                                var contentList = AppState.Instance.Content.ToList();
-                                Log.Information($"File name: {fileName}, without extension: {fileNameWithoutExtension}");
-
-                                var contentToUpdate = contentList.FirstOrDefault(c =>
-                                    Path.GetFileNameWithoutExtension(c.FileName) == fileNameWithoutExtension);
+                                // Update the content with the uploadId (re-resolved by id in case state was reloaded mid-upload)
+                                var contentToUpdate = AppState.Instance.Content.FirstOrDefault(c => c.Id == content.Id);
                                 Log.Information($"Content to update: {contentToUpdate?.FileName ?? "not found"}");
 
                                 if (contentToUpdate != null)
@@ -184,8 +187,7 @@ namespace Segra.Backend.Media
                                     contentToUpdate.UploadId = uploadId;
 
                                     // Also update the metadata file
-                                    string metadataFolderPath = FolderNames.GetMetadataFolderPath(contentToUpdate.Type);
-                                    string metadataFilePath = PathUtils.Combine(metadataFolderPath, $"{fileNameWithoutExtension}.json");
+                                    string metadataFilePath = FolderNames.GetMetadataFilePath(contentToUpdate.Type, contentToUpdate.Id);
 
                                     var updatedContent = await ContentService.UpdateMetadataFile(metadataFilePath, content =>
                                     {
