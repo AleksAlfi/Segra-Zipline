@@ -1,6 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { TriangleAlert, LogOut, Ellipsis, KeyRound, Lock, ShieldCheck } from 'lucide-react';
-import { DiscordIcon } from '../icons/BrandIcons';
 import { useAuth } from '../../Hooks/useAuth';
 import { useSettings, useSettingsUpdater } from '../../Context/SettingsContext';
 import Button from '../Button';
@@ -14,14 +13,11 @@ export default function AccountSection() {
     defaultServerUrl,
     isAuthenticated,
     isAuthenticating,
-    isWaitingForDiscord,
     authError,
     totpRequired,
     clearAuthError,
     loginWithPassword,
     loginWithToken,
-    loginWithDiscord,
-    cancelDiscordLogin,
     signOut,
   } = useAuth();
   const [error, setError] = useState('');
@@ -96,15 +92,6 @@ export default function AccountSection() {
     loginWithToken(server.trim(), apiToken.trim());
   };
 
-  const handleDiscordLogin = () => {
-    setError('');
-    clearAuthError();
-    if (!validateServer()) return;
-    localStorage.setItem('ziplineServerUrl', server.trim());
-    localStorage.setItem('ziplineLoginMethod', 'discord');
-    loginWithDiscord(server.trim());
-  };
-
   const handleLogout = async () => {
     signOut();
   };
@@ -134,37 +121,6 @@ export default function AccountSection() {
               required
             />
           </div>
-
-          <Button
-            variant="primary"
-            className="w-full gap-2 font-semibold text-white border-custom hover:border-custom"
-            onClick={handleDiscordLogin}
-            loading={isWaitingForDiscord}
-            disabled={isAuthenticating}
-          >
-            {!isWaitingForDiscord && <DiscordIcon className="w-5 h-5" />}
-            {isWaitingForDiscord ? 'Waiting for your token...' : 'Sign in with Discord'}
-          </Button>
-
-          {isWaitingForDiscord && (
-            <div className="text-xs text-gray-400 space-y-1 -mt-2">
-              <p>
-                1. Finish signing in with Discord in your browser.
-                <br />
-                2. In the Zipline dashboard, open Settings and click the copy-token button next to
-                your API token — Segra picks it up automatically.
-              </p>
-              <button
-                type="button"
-                className="underline underline-offset-2 hover:text-gray-200"
-                onClick={cancelDiscordLogin}
-              >
-                Cancel
-              </button>
-            </div>
-          )}
-
-          <div className="divider">Or</div>
 
           {/* Tab toggle */}
           <div className="tabs tabs-boxed justify-center">
