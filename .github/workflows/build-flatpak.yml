@@ -1,0 +1,111 @@
+name: Build Flatpak for Release
+
+# Fork-only workflow. This fork publishes releases by hand (build-local.sh on Windows, then a GitHub
+# API upload), so upstream's create-release.yml / create-prerelease.yml never run here and the Linux
+# half of every release was going missing. Dispatch this against an existing release tag and it
+# builds that tag's source into a Flatpak and attaches the Linux assets to that same release, so the
+# fork's releases carry the same Linux artifacts upstream ships.
+#
+# Run it after publishing the Windows assets for a new tag:
+#   Actions -> Build Flatpak for Release -> Run workflow -> tag = v1.7.1-beta.2
+# (Keep the branch selector on the default branch; the tag input decides which source is built.)
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing release tag to build and attach Linux assets to (e.g. v1.7.0-fork.2)'
+        required: true
+        type: string
+      obs_version:
+        description: 'OBS version to bundle into the Flatpak'
+        required: false
+        default: '32.2.0'
+        type: string
+
+jobs:
+  flatpak:
+    # Pinned to 24.04 rather than ubuntu-latest: build-flatpak.sh bundles OBS's dependency closure
+    # from the host, and Obs/build-linux-bundle.sh builds that OBS bundle against the Ubuntu 24.04
+    # base (glibc 2.39, FFmpeg 6). A newer runner image would bundle FFmpeg 7+ sonames libobs cannot
+    # load, and the apt package names below (libmbedtls14t64, libsrt1.5-*, libx264-164) are 24.04's.
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      # The tag, not the dispatch ref: the workflow definition comes from the default branch while
+      # the source built is exactly what was released.
+      - name: Checkout the released source
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.tag }}
+          submodules: recursive
+
+      - name: Derive version from tag
+        id: ver
+        env:
+          TAG: ${{ inputs.tag }}
+        run: echo "num=${TAG#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Setup Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install Flatpak toolchain + OBS media deps
+        # OBS's media libs (FFmpeg 6, x264, jansson, rist, srt, mbedtls) so build-flatpak.sh can
+        # bundle its ldd closure. obs-ffmpeg.so links the openssl srt variant, obs-outputs.so needs
+        # all three mbedtls libs, and libobs-scripting needs luajit.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y flatpak flatpak-builder \
+            ffmpeg libavcodec-extra libx264-164 libjansson4 librist4 libsrt1.5-gnutls \
+            libsrt1.5-openssl libmbedtls14t64 libmbedx509-1t64 libmbedcrypto7t64 libluajit-5.1-2
+          flatpak remote-add --if-not-exists --user flathub https://flathub.org/repo/flathub.flatpakrepo
+
+      - name: Build Flatpak (OBS bundled)
+        env:
+          SEGRA_VERSION: ${{ steps.ver.outputs.num }}
+          OBS_VERSION: ${{ inputs.obs_version }}
+        run: ./build-flatpak.sh
+
+      - name: Rename to the fork's asset naming
+        # The app-id stays upstream's tv.segra.Segra; only the download names carry the fork's name,
+        # matching SegraZipline-win-Setup.exe on the same release.
+        env:
+          V: ${{ steps.ver.outputs.num }}
+        run: |
+          mv "output/Segra.flatpak" "output/SegraZipline.flatpak"
+          mv "output/segra-$V-x86_64.tar.gz" "output/segrazipline-$V-x86_64.tar.gz"
+          mv "output/segra-$V-x86_64.tar.gz.sha256" "output/segrazipline-$V-x86_64.tar.gz.sha256"
+
+      # Kept independently of the release upload so a failed upload doesn't cost a 20-minute rebuild.
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: SegraZipline-Linux
+          path: |
+            ./output/SegraZipline.flatpak
+            ./output/segrazipline-*-x86_64.tar.gz
+            ./output/segrazipline-*-x86_64.tar.gz.sha256
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Attach to the release
+        # The tarball + sha256 mirror what upstream ships for Flathub manifests; the .flatpak bundle
+        # is the direct install.
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          TAG: ${{ inputs.tag }}
+          V: ${{ steps.ver.outputs.num }}
+        run: |
+          gh release upload "$TAG" --repo "$REPO" --clobber \
+            "output/SegraZipline.flatpak" \
+            "output/segrazipline-$V-x86_64.tar.gz" \
+            "output/segrazipline-$V-x86_64.tar.gz.sha256"
