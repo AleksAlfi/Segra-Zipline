@@ -20,10 +20,14 @@ namespace Segra.Backend.Media
         /// Writes the metadata file for a video and returns the new content id, or null when it could not be written.
         /// The id is the file name of the metadata, thumbnail and waveform files.
         /// </summary>
-        public static async Task<string?> CreateMetadataFile(string filePath, Content.ContentType type, string game, List<Bookmark>? bookmarks = null, string? title = null, DateTime? createdAt = null, int? igdbId = null, bool isImported = false, List<string>? audioTrackNames = null, bool compressed = false)
+        public static async Task<string?> CreateMetadataFile(string filePath, Content.ContentType type, string game, List<Bookmark>? bookmarks = null, string? title = null, DateTime? createdAt = null, int? igdbId = null, bool isImported = false, List<string>? audioTrackNames = null, List<string>? audioTrackTypes = null, bool compressed = false, string? gameExePath = null)
         {
             bookmarks ??= [];
             filePath = PathUtils.Normalize(filePath);
+            if (string.Equals(gameExePath, "Unknown", StringComparison.OrdinalIgnoreCase))
+            {
+                gameExePath = null;
+            }
 
             try
             {
@@ -66,7 +70,9 @@ namespace Segra.Backend.Media
                     CreatedAt = createdAt ?? DateTime.Now,
                     Duration = duration,
                     AudioTrackNames = audioTrackNames,
+                    AudioTrackTypes = audioTrackTypes,
                     IgdbId = igdbId,
+                    GameExePath = gameExePath,
                     IsImported = isImported,
                     Compressed = compressed
                 };

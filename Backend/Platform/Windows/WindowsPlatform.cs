@@ -1,12 +1,9 @@
 using System.Diagnostics;
-using System.Windows.Forms;
 using NAudio.Wave;
 using NAudio.CoreAudioApi;
 using NAudio.Wave.SampleProviders;
 using Segra.Backend.App;
-using Segra.Backend.Core;
 using Segra.Backend.Core.Models;
-using Segra.Backend.Shared;
 using Segra.Backend.Windows.Audio;
 using Segra.Backend.Windows.Display;
 using Segra.Backend.Windows.Watchers;
@@ -15,7 +12,7 @@ namespace Segra.Backend.Platform.Windows
 {
     internal sealed class WindowsTrayIcon : ITrayIcon
     {
-        public void Initialize(Action onOpen, Action onExit)
+        public void Initialize(Action onOpen, Action onResetWindowSize, Action onExit, Func<bool> isWindowOpen)
         {
             var trayThread = new Thread(() =>
             {
@@ -30,8 +27,12 @@ namespace Segra.Backend.Platform.Windows
                 };
 
                 var menu = new ContextMenuStrip();
-                menu.Items.Add("Open", null, (s, e) => onOpen());
-                menu.Items.Add("Exit", null, (s, e) => onExit());
+                var openItem = new ToolStripMenuItem("Open", null, (s, e) => onOpen());
+                menu.Items.Add(openItem);
+                menu.Items.Add("Reset window size", null, (s, e) => onResetWindowSize());
+                menu.Items.Add(new ToolStripSeparator());
+                menu.Items.Add("Quit", null, (s, e) => onExit());
+                menu.Opening += (s, e) => openItem.Visible = !isWindowOpen();
                 icon.ContextMenuStrip = menu;
 
                 icon.MouseDoubleClick += (s, e) =>

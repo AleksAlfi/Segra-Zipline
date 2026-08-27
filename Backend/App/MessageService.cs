@@ -5,7 +5,6 @@ using System.Text;
 using System.Text.Json;
 using Segra.Backend.Auth;
 using Segra.Backend.Core;
-using System.Diagnostics;
 using Segra.Backend.Games;
 using Segra.Backend.Media;
 using Segra.Backend.Shared;
@@ -152,6 +151,20 @@ namespace Segra.Backend.App
                                 {
                                     Log.Warning($"File not found for clipboard copy: {clipboardFilePath}");
                                 }
+                            }
+                            break;
+                        case "CopyCompressedFileToClipboard":
+                            root.TryGetProperty("Parameters", out JsonElement copyCompressedParams);
+                            if (copyCompressedParams.TryGetProperty("FilePath", out JsonElement copyCompressedFilePath) &&
+                                copyCompressedParams.TryGetProperty("MaxSizeMb", out JsonElement copyCompressedMaxSizeMb))
+                            {
+                                string compressedSourcePath = copyCompressedFilePath.GetString()!;
+                                int maxSizeMb = copyCompressedMaxSizeMb.GetInt32();
+                                _ = Task.Run(() => CompressionService.CopyCompressedToClipboard(compressedSourcePath, maxSizeMb));
+                            }
+                            else
+                            {
+                                Log.Warning("FilePath or MaxSizeMb parameter not found in CopyCompressedFileToClipboard message");
                             }
                             break;
                         case "OpenInBrowser":
@@ -597,6 +610,7 @@ namespace Segra.Backend.App
                         {
                             Id = id,
                             Type = content.Type.ToString(),
+                            ContentId = content.Id,
                             StartTime = startTime,
                             EndTime = endTime,
                             FileName = content.FileName,

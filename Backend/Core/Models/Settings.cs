@@ -1,6 +1,5 @@
 using Serilog;
 using Segra.Backend.App;
-using Segra.Backend.Core;
 using Segra.Backend.Platform;
 using System.Text.Json.Serialization;
 
@@ -60,6 +59,7 @@ namespace Segra.Backend.Core.Models
         private int _replayBufferMaxSize = 1000;
         private List<Keybind> _keybindings;
         private List<GameSetting> _games = new List<GameSetting>();
+        private bool _autoRecordGames = true;
         private Auth _auth = new Auth();
         private bool _clipClearSegmentsAfterCreatingClip = false;
         private bool _clipShowInBrowserAfterUpload = false;
@@ -74,6 +74,7 @@ namespace Segra.Backend.Core.Models
         private string _clipAudioQuality = "128k";
         private string _clipPreset = "veryfast";
         private bool _clipKeepSeparateAudioTracks = false;
+        private List<int> _copyCompressSizesMb = new List<int> { 20, 50, 100, 500 };
         private float _soundEffectsVolume = 0.5f;
         private bool _showNewBadgeOnVideos = false;
         private bool _showGameBackground = true;
@@ -86,7 +87,6 @@ namespace Segra.Backend.Core.Models
         private bool _confirmBeforeDeleting = false;
         private bool _removeOriginalAfterCompression = false;
         private bool _discardSessionsWithoutBookmarks = false;
-        private bool _disableWindowsGameMode = false;
         private GameIntegrations _gameIntegrations = new GameIntegrations();
 
         private List<MenuItemPreference> _menuItems = KnownMenuItemIds
@@ -534,6 +534,15 @@ namespace Segra.Backend.Core.Models
             }
         }
 
+        // When false, Segra won't automatically start recording when a game launches.
+        // Explicit per-game entries (Record == true) still record, and manual recording still works.
+        [JsonPropertyName("autoRecordGames")]
+        public bool AutoRecordGames
+        {
+            get => _autoRecordGames;
+            set => _autoRecordGames = value;
+        }
+
         // Legacy lists kept only so the pre-rework whitelist/blacklist survive a settings load until the
         // "whitelist_blacklist_to_games" migration converts them into Games and nulls them out (after which
         // WhenWritingNull stops them from being written back). Do not use these for anything else.
@@ -673,6 +682,17 @@ namespace Segra.Backend.Core.Models
                 {
                     _ziplineGroupByGame = value;
                 }
+            }
+        }
+
+        // Hidden setting (no UI), editable via settings.json
+        [JsonPropertyName("copyCompressSizesMb")]
+        public List<int> CopyCompressSizesMb
+        {
+            get => _copyCompressSizesMb;
+            set
+            {
+                _copyCompressSizesMb = value ?? new List<int> { 20, 50, 100, 500 };
             }
         }
 
@@ -923,21 +943,6 @@ namespace Segra.Backend.Core.Models
             }
         }
 
-        // When true, Segra ensures Windows Game Mode is turned off on startup.
-        // When false, Segra leaves Game Mode untouched (it never turns it back on).
-        [JsonPropertyName("disableWindowsGameMode")]
-        public bool DisableWindowsGameMode
-        {
-            get => _disableWindowsGameMode;
-            set
-            {
-                if (_disableWindowsGameMode != value)
-                {
-                    _disableWindowsGameMode = value;
-                }
-            }
-        }
-
         [JsonPropertyName("selectedOBSVersion")]
         public string? SelectedOBSVersion
         {
@@ -1138,6 +1143,9 @@ namespace Segra.Backend.Core.Models
         [JsonPropertyName("audioTrackNames")]
         public List<string>? AudioTrackNames { get; set; }
 
+        [JsonPropertyName("audioTrackTypes")]
+        public List<string>? AudioTrackTypes { get; set; }
+
         public void AddBookmark(Bookmark bookmark)
         {
             lock (_bookmarksLock)
@@ -1220,11 +1228,23 @@ namespace Segra.Backend.Core.Models
 
         public int? IgdbId { get; set; }
 
+        // Full path of the game exe this video was recorded from, for diagnostics.
+        private string? _gameExePath;
+        public string? GameExePath
+        {
+            get => _gameExePath;
+            set => _gameExePath = Segra.Backend.Shared.PathUtils.NormalizeOrNull(value);
+        }
+
         // Names for the audio tracks in the recording/container.
         // Track 1 is always the mixed track ("Full Mix").
         // Subsequent tracks correspond to each configured audio source
         // in the same order they are added (inputs, then outputs), up to 6 total tracks in OBS.
         public List<string>? AudioTrackNames { get; set; }
+
+        // Semantic type for each audio track: "mix", "input", or "output".
+        // Kept parallel to AudioTrackNames so older metadata remains compatible.
+        public List<string>? AudioTrackTypes { get; set; }
 
         public bool IsImported { get; set; } = false;
 
