@@ -2,7 +2,7 @@
 # release tarball (by url + sha256) since Flathub's builders can't see our working copy.
 app-id: tv.segra.Segra
 runtime: org.gnome.Platform
-runtime-version: '47'
+runtime-version: '50'
 sdk: org.gnome.Sdk
 command: segra
 
@@ -39,21 +39,13 @@ finish-args:
   # Where recordings/clips are written (default content folder is under the user's Videos)
   - --filesystem=xdg-videos
 
-# Full FFmpeg for libobs' obs-ffmpeg / VAAPI encoders; soname must match the OBS build (FFmpeg 6).
-add-extensions:
-  org.freedesktop.Platform.ffmpeg-full:
-    directory: lib/ffmpeg
-    version: '24.08'
-    add-ld-path: .
-    no-autodownload: false
-    autodelete: false
+# No ffmpeg-full extension: it stops at 24.08, and the runtime ships FFmpeg itself. libobs uses
+# the FFmpeg 6 bundled into /app/segra/lib, which segra.sh puts ahead of the runtime's.
 
 modules:
   - name: segra
     buildsystem: simple
     build-commands:
-      # Mount point for the ffmpeg-full extension
-      - mkdir -p /app/lib/ffmpeg
       # App payload (Segra + .NET runtime + wwwroot + OBS lib/obs-plugins/data + the two helpers)
       - install -d /app/segra
       - cp -a payload/. /app/segra/

@@ -17,6 +17,10 @@ export SEGRA_VERSION="$VERSION"
 APP_ID="tv.segra.Segra"
 MANIFEST="packaging/flatpak/${APP_ID}.yml"
 STAGING="flatpak-staging"
+# Single source of truth for the runtime: the manifest. Keeps the install below and the soname
+# inventory further down from drifting apart when the runtime is bumped.
+RUNTIME_VERSION="$(sed -n "s/^runtime-version:[[:space:]]*['\"]\{0,1\}\([0-9]\{1,\}\).*/\1/p" "$MANIFEST")"
+[ -n "$RUNTIME_VERSION" ] || { echo "error: could not read runtime-version from $MANIFEST"; exit 1; }
 
 # Fork-only: same bake-in as build-local.sh's --url/--clipurl, for private Linux builds. Unset means
 # an empty default, which is what public releases must ship (the server URL is typed at login).
@@ -36,7 +40,7 @@ command -v ffmpeg >/dev/null 2>&1 || { echo "error: ffmpeg not installed (apt in
 echo "=== Runtime/SDK (no-op if already installed) ==="
 flatpak remote-add --if-not-exists --user flathub https://flathub.org/repo/flathub.flatpakrepo || true
 flatpak install --user -y --noninteractive flathub \
-    org.gnome.Platform//47 org.gnome.Sdk//47 org.freedesktop.Platform.ffmpeg-full//24.08 || true
+    "org.gnome.Platform//$RUNTIME_VERSION" "org.gnome.Sdk//$RUNTIME_VERSION" || true
 
 echo "=== 1/4 Frontend + publish (linux-x64, v$VERSION) ==="
 (cd Frontend && npm ci && SEGRA_VERSION="$VERSION" npm run build)
@@ -71,9 +75,9 @@ chmod +x "$STAGING/payload/Segra" "$STAGING/payload/obs-nvenc-test" "$STAGING/pa
 LIBDST="$STAGING/payload/lib"
 # Bundle only sonames the GNOME runtime doesn't already provide, so glibc/GL/GTK/WebKitGTK stay runtime-supplied.
 declare -A RUNTIME_PROVIDES
-RT="$(flatpak info -l org.gnome.Platform//47 2>/dev/null || true)"
+RT="$(flatpak info -l "org.gnome.Platform//$RUNTIME_VERSION" 2>/dev/null || true)"
 # Fail rather than warn: an empty inventory would silently bundle the entire ldd closure instead.
-[ -n "$RT" ] && [ -d "$RT/files" ] || { echo "error: org.gnome.Platform//47 not installed; cannot determine which libraries to bundle"; exit 1; }
+[ -n "$RT" ] && [ -d "$RT/files" ] || { echo "error: org.gnome.Platform//$RUNTIME_VERSION not installed; cannot determine which libraries to bundle"; exit 1; }
 while IFS= read -r so; do RUNTIME_PROVIDES["$(basename "$so")"]=1; done \
   < <(find "$RT/files" -name '*.so*' 2>/dev/null)
 [ "${#RUNTIME_PROVIDES[@]}" -gt 0 ] || { echo "error: runtime inventory is empty (looked in $RT/files)"; exit 1; }
