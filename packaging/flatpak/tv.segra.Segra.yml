@@ -10,7 +10,10 @@ command: segra
 finish-args:
   # Windowing + input (Photino / WebKitGTK)
   - --socket=wayland
-  - --socket=fallback-x11
+  # x11, not fallback-x11: libobs links Xlib and obs_startup() needs a display, but "fallback"
+  # withholds the X socket whenever Wayland is granted, so OBS failed to initialize on every
+  # Wayland session ("obs_startup failed", recording never available). XWayland satisfies it.
+  - --socket=x11
   - --share=ipc
   # Audio in/out
   - --socket=pulseaudio
