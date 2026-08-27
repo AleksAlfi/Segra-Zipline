@@ -18,6 +18,17 @@ APP_ID="tv.segra.Segra"
 MANIFEST="packaging/flatpak/${APP_ID}.yml"
 STAGING="flatpak-staging"
 
+# Fork-only: same bake-in as build-local.sh's --url/--clipurl, for private Linux builds. Unset means
+# an empty default, which is what public releases must ship (the server URL is typed at login).
+BAKE_PROPS=()
+if [ -n "${ZIPLINE_DEFAULT_URL:-}" ]; then
+    BAKE_PROPS+=("-p:ZiplineDefaultUrl=$ZIPLINE_DEFAULT_URL")
+    echo "note: baking default server URL into this build (do NOT publish it)"
+fi
+if [ -n "${ZIPLINE_DEFAULT_CLIP_DOMAIN:-}" ]; then
+    BAKE_PROPS+=("-p:ZiplineDefaultClipDomain=$ZIPLINE_DEFAULT_CLIP_DOMAIN")
+fi
+
 command -v flatpak-builder >/dev/null 2>&1 || { echo "error: flatpak-builder not installed (apt install flatpak-builder)"; exit 1; }
 command -v ffmpeg >/dev/null 2>&1 || { echo "error: ffmpeg not installed (apt install ffmpeg); its binary gets bundled into the payload"; exit 1; }
 
@@ -31,7 +42,8 @@ echo "=== 1/4 Frontend + publish (linux-x64, v$VERSION) ==="
 (cd Frontend && npm ci && SEGRA_VERSION="$VERSION" npm run build)
 rm -rf publish
 dotnet publish Segra.csproj -c Release --self-contained \
-    -r linux-x64 -f net10.0 -p:TargetFrameworks=net10.0 -p:Version="$VERSION" -o publish
+    -r linux-x64 -f net10.0 -p:TargetFrameworks=net10.0 -p:Version="$VERSION" \
+    "${BAKE_PROPS[@]}" -o publish
 # PhotinoServer creates its webroot at startup if missing; ship it so nothing is created at runtime.
 mkdir -p publish/wwwroot && cp -r Frontend/dist/* publish/wwwroot/ 2>/dev/null || true
 
