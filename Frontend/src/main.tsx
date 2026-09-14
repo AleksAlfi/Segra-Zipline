@@ -25,16 +25,39 @@ const queryClient = new QueryClient({
 // Clear query cache on sign out
 onSignOut(() => queryClient.clear());
 
-createRoot(document.getElementById('root')!).render(
-  <StrictMode>
-    <QueryClientProvider client={queryClient}>
-      <AuthProvider>
-        <SelectedVideoProvider>
-          <SelectedMenuProvider>
-            <App />
-          </SelectedMenuProvider>
-        </SelectedVideoProvider>
-      </AuthProvider>
-    </QueryClientProvider>
-  </StrictMode>,
-);
+// Segra provides its own context menus where right-click actions are supported.
+document.addEventListener('contextmenu', (event) => {
+  event.preventDefault();
+  window.dispatchEvent(new Event('segra:close-content-context-menus'));
+});
+
+// Wait for Roboto to load before the first render, so the UI never appears with a
+// fallback font that swaps (and shifts the layout) when the font arrives. The window
+// stays visible the whole time; it just shows the app background until the UI is ready.
+// The timeout guards against a stalled font load leaving a blank window.
+const fontsReady = Promise.race([
+  Promise.all([
+    document.fonts.load('400 1em Roboto'),
+    document.fonts.load('500 1em Roboto'),
+    document.fonts.load('700 1em Roboto'),
+    document.fonts.ready,
+  ]),
+  new Promise((resolve) => setTimeout(resolve, 2000)),
+]);
+
+const renderApp = () =>
+  createRoot(document.getElementById('root')!).render(
+    <StrictMode>
+      <QueryClientProvider client={queryClient}>
+        <AuthProvider>
+          <SelectedVideoProvider>
+            <SelectedMenuProvider>
+              <App />
+            </SelectedMenuProvider>
+          </SelectedVideoProvider>
+        </AuthProvider>
+      </QueryClientProvider>
+    </StrictMode>,
+  );
+
+fontsReady.then(renderApp);

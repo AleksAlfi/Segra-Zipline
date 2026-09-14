@@ -1,7 +1,7 @@
 #!/bin/bash
 # Builds the Segra Flatpak, one artifact for every distro.
 #
-#   SEGRA_VERSION=1.7.0 OBS_VERSION=32.2.0 ./build-flatpak.sh
+#   SEGRA_VERSION=1.7.0 OBS_VERSION=32.2.2 ./build-flatpak.sh
 #
 # Requires: flatpak, flatpak-builder, dotnet 10 SDK, node, ffmpeg (installs the GNOME 47 runtime/SDK +
 # ffmpeg-full from Flathub if missing).
@@ -11,12 +11,27 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR"
 
 VERSION="${SEGRA_VERSION:-1.0.0}"
-OBS_VERSION="${OBS_VERSION:-32.2.0}"
+OBS_VERSION="${OBS_VERSION:-32.2.2}"
 # Exported so csproj's BuildFrontendAssets target stamps the frontend build with the same version.
 export SEGRA_VERSION="$VERSION"
 APP_ID="tv.segra.Segra"
 MANIFEST="packaging/flatpak/${APP_ID}.yml"
 STAGING="flatpak-staging"
+# Single source of truth for the runtime: the manifest. Keeps the install below and the soname
+# inventory further down from drifting apart when the runtime is bumped.
+RUNTIME_VERSION="$(sed -n "s/^runtime-version:[[:space:]]*['\"]\{0,1\}\([0-9]\{1,\}\).*/\1/p" "$MANIFEST")"
+[ -n "$RUNTIME_VERSION" ] || { echo "error: could not read runtime-version from $MANIFEST"; exit 1; }
+
+# Fork-only: same bake-in as build-local.sh's --url/--clipurl, for private Linux builds. Unset means
+# an empty default, which is what public releases must ship (the server URL is typed at login).
+BAKE_PROPS=()
+if [ -n "${ZIPLINE_DEFAULT_URL:-}" ]; then
+    BAKE_PROPS+=("-p:ZiplineDefaultUrl=$ZIPLINE_DEFAULT_URL")
+    echo "note: baking default server URL into this build (do NOT publish it)"
+fi
+if [ -n "${ZIPLINE_DEFAULT_CLIP_DOMAIN:-}" ]; then
+    BAKE_PROPS+=("-p:ZiplineDefaultClipDomain=$ZIPLINE_DEFAULT_CLIP_DOMAIN")
+fi
 
 command -v flatpak-builder >/dev/null 2>&1 || { echo "error: flatpak-builder not installed (apt install flatpak-builder)"; exit 1; }
 command -v ffmpeg >/dev/null 2>&1 || { echo "error: ffmpeg not installed (apt install ffmpeg); its binary gets bundled into the payload"; exit 1; }
@@ -25,13 +40,14 @@ command -v ffmpeg >/dev/null 2>&1 || { echo "error: ffmpeg not installed (apt in
 echo "=== Runtime/SDK (no-op if already installed) ==="
 flatpak remote-add --if-not-exists --user flathub https://flathub.org/repo/flathub.flatpakrepo || true
 flatpak install --user -y --noninteractive flathub \
-    org.gnome.Platform//47 org.gnome.Sdk//47 org.freedesktop.Platform.ffmpeg-full//24.08 || true
+    "org.gnome.Platform//$RUNTIME_VERSION" "org.gnome.Sdk//$RUNTIME_VERSION" || true
 
 echo "=== 1/4 Frontend + publish (linux-x64, v$VERSION) ==="
 (cd Frontend && npm ci && SEGRA_VERSION="$VERSION" npm run build)
 rm -rf publish
 dotnet publish Segra.csproj -c Release --self-contained \
-    -r linux-x64 -f net10.0 -p:TargetFrameworks=net10.0 -p:Version="$VERSION" -o publish
+    -r linux-x64 -f net10.0 -p:TargetFrameworks=net10.0 -p:Version="$VERSION" \
+    "${BAKE_PROPS[@]}" -o publish
 # PhotinoServer creates its webroot at startup if missing; ship it so nothing is created at runtime.
 mkdir -p publish/wwwroot && cp -r Frontend/dist/* publish/wwwroot/ 2>/dev/null || true
 
@@ -59,9 +75,9 @@ chmod +x "$STAGING/payload/Segra" "$STAGING/payload/obs-nvenc-test" "$STAGING/pa
 LIBDST="$STAGING/payload/lib"
 # Bundle only sonames the GNOME runtime doesn't already provide, so glibc/GL/GTK/WebKitGTK stay runtime-supplied.
 declare -A RUNTIME_PROVIDES
-RT="$(flatpak info -l org.gnome.Platform//47 2>/dev/null || true)"
+RT="$(flatpak info -l "org.gnome.Platform//$RUNTIME_VERSION" 2>/dev/null || true)"
 # Fail rather than warn: an empty inventory would silently bundle the entire ldd closure instead.
-[ -n "$RT" ] && [ -d "$RT/files" ] || { echo "error: org.gnome.Platform//47 not installed; cannot determine which libraries to bundle"; exit 1; }
+[ -n "$RT" ] && [ -d "$RT/files" ] || { echo "error: org.gnome.Platform//$RUNTIME_VERSION not installed; cannot determine which libraries to bundle"; exit 1; }
 while IFS= read -r so; do RUNTIME_PROVIDES["$(basename "$so")"]=1; done \
   < <(find "$RT/files" -name '*.so*' 2>/dev/null)
 [ "${#RUNTIME_PROVIDES[@]}" -gt 0 ] || { echo "error: runtime inventory is empty (looked in $RT/files)"; exit 1; }

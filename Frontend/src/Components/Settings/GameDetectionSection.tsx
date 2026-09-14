@@ -22,6 +22,7 @@ import {
 import { useModal } from '../../Context/ModalContext';
 import CustomGameModal from '../CustomGameModal';
 import DropdownSelect from '../DropdownSelect';
+import RangeSlider from '../RangeSlider';
 import { useDeleteConfirmation } from '../../Hooks/useDeleteConfirmation';
 
 const BITRATE_OPTIONS = Array.from({ length: 19 }, (_, i) => (i + 2) * 5); // 10..100 Mbps
@@ -275,6 +276,23 @@ export default function GameDetectionSection() {
         override your recording settings for that game. Most games are detected automatically, so
         add one only if it isn&apos;t being recorded, or when you want different settings for it.
       </p>
+
+      {/* Global auto-record toggle */}
+      <label className="flex items-center gap-3 cursor-pointer p-4 bg-base-200 rounded-lg border border-base-400 mb-5">
+        <input
+          type="checkbox"
+          className="checkbox checkbox-primary checkbox-sm"
+          checked={settings.autoRecordGames}
+          onChange={(e) => updateSettings({ autoRecordGames: e.target.checked })}
+        />
+        <div>
+          <div className="font-semibold">Auto-record Games</div>
+          <div className="text-xs opacity-70 mt-0.5">
+            Automatically start recording when a game launches. Games you&apos;ve added with
+            recording enabled and manual recordings are unaffected.
+          </div>
+        </div>
+      </label>
 
       {/* Add game search */}
       <div className="mb-5 relative" ref={searchRef}>
@@ -663,8 +681,7 @@ function GamePanel({
       >
         <div className="flex items-center gap-3">
           <VolumeX className="w-4 h-4 text-gray-400 shrink-0" />
-          <input
-            type="range"
+          <RangeSlider
             min="0"
             max="2"
             step="0.02"
@@ -679,7 +696,7 @@ function GamePanel({
               onUpdate({ volumeOverride: draggingVolume ?? game.volumeOverride ?? 1.0 });
               setDraggingVolume(null);
             }}
-            className="range range-xs range-primary w-48 [--range-fill:0]"
+            className="w-48"
           />
           <Volume2 className="w-4 h-4 text-gray-400 shrink-0" />
           <span className="text-xs w-10 text-right">

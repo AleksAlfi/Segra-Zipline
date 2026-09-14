@@ -5,7 +5,6 @@ using System.Text;
 using System.Text.Json;
 using Segra.Backend.Auth;
 using Segra.Backend.Core;
-using System.Diagnostics;
 using Segra.Backend.Games;
 using Segra.Backend.Media;
 using Segra.Backend.Shared;
@@ -152,6 +151,20 @@ namespace Segra.Backend.App
                                 {
                                     Log.Warning($"File not found for clipboard copy: {clipboardFilePath}");
                                 }
+                            }
+                            break;
+                        case "CopyCompressedFileToClipboard":
+                            root.TryGetProperty("Parameters", out JsonElement copyCompressedParams);
+                            if (copyCompressedParams.TryGetProperty("FilePath", out JsonElement copyCompressedFilePath) &&
+                                copyCompressedParams.TryGetProperty("MaxSizeMb", out JsonElement copyCompressedMaxSizeMb))
+                            {
+                                string compressedSourcePath = copyCompressedFilePath.GetString()!;
+                                int maxSizeMb = copyCompressedMaxSizeMb.GetInt32();
+                                _ = Task.Run(() => CompressionService.CopyCompressedToClipboard(compressedSourcePath, maxSizeMb));
+                            }
+                            else
+                            {
+                                Log.Warning("FilePath or MaxSizeMb parameter not found in CopyCompressedFileToClipboard message");
                             }
                             break;
                         case "OpenInBrowser":
@@ -320,34 +333,23 @@ namespace Segra.Backend.App
         {
             Log.Information($"Handling DeleteContent with message: {message}");
 
-            if (message.TryGetProperty("FileName", out JsonElement fileNameElement) &&
-                message.TryGetProperty("ContentType", out JsonElement contentTypeElement))
+            if (message.TryGetProperty("Id", out JsonElement idElement))
             {
-                string fileName = fileNameElement.GetString()!;
-                string contentTypeStr = contentTypeElement.GetString()!;
+                string id = idElement.GetString()!;
+                Content? content = AppState.Instance.Content.FirstOrDefault(c => c.Id == id);
 
-                if (Enum.TryParse(contentTypeStr, true, out Content.ContentType contentType))
+                if (content != null && !string.IsNullOrEmpty(content.FilePath))
                 {
-                    Content? content = AppState.Instance.Content.FirstOrDefault(c =>
-                        c.FileName == fileName && c.Type == contentType);
-
-                    if (content != null && !string.IsNullOrEmpty(content.FilePath))
-                    {
-                        await ContentService.DeleteContent(content.FilePath, contentType);
-                    }
-                    else
-                    {
-                        Log.Warning($"Content not found in state for deletion: {fileName} ({contentTypeStr})");
-                    }
+                    await ContentService.DeleteContent(content.FilePath, content.Type, content.Id);
                 }
                 else
                 {
-                    Log.Error($"Invalid ContentType provided: {contentTypeStr}");
+                    Log.Warning($"Content not found in state for deletion: {id}");
                 }
             }
             else
             {
-                Log.Information("FileName or ContentType property not found in DeleteContent message.");
+                Log.Information("Id property not found in DeleteContent message.");
             }
         }
 
@@ -355,9 +357,9 @@ namespace Segra.Backend.App
         {
             Log.Information($"Handling DeleteMultipleContent with message: {message}");
 
-            if (!message.TryGetProperty("Items", out JsonElement itemsElement))
+            if (!message.TryGetProperty("Ids", out JsonElement idsElement))
             {
-                Log.Information("Items property not found in DeleteMultipleContent message.");
+                Log.Information("Ids property not found in DeleteMultipleContent message.");
                 return;
             }
 
@@ -365,33 +367,19 @@ namespace Segra.Backend.App
             Settings.Instance._isBulkUpdating = true;
             try
             {
-                foreach (var item in itemsElement.EnumerateArray())
+                foreach (var idElement in idsElement.EnumerateArray())
                 {
-                    if (item.TryGetProperty("FileName", out JsonElement fileNameElement) &&
-                        item.TryGetProperty("ContentType", out JsonElement contentTypeElement))
+                    string id = idElement.GetString()!;
+                    Content? content = AppState.Instance.Content.FirstOrDefault(c => c.Id == id);
+
+                    if (content != null && !string.IsNullOrEmpty(content.FilePath))
                     {
-                        string fileName = fileNameElement.GetString()!;
-                        string contentTypeStr = contentTypeElement.GetString()!;
-
-                        if (Enum.TryParse(contentTypeStr, true, out Content.ContentType contentType))
-                        {
-                            Content? content = AppState.Instance.Content.FirstOrDefault(c =>
-                                c.FileName == fileName && c.Type == contentType);
-
-                            if (content != null && !string.IsNullOrEmpty(content.FilePath))
-                            {
-                                await ContentService.DeleteContent(content.FilePath, contentType, sendToFrontend: false);
-                                Log.Information($"Deleted content: {fileName}");
-                            }
-                            else
-                            {
-                                Log.Warning($"Content not found in state for deletion: {fileName} ({contentTypeStr})");
-                            }
-                        }
-                        else
-                        {
-                            Log.Error($"Invalid ContentType provided: {contentTypeStr}");
-                        }
+                        await ContentService.DeleteContent(content.FilePath, content.Type, content.Id, sendToFrontend: false);
+                        Log.Information($"Deleted content: {content.FileName}");
+                    }
+                    else
+                    {
+                        Log.Warning($"Content not found in state for deletion: {id}");
                     }
                 }
             }
@@ -545,15 +533,32 @@ namespace Segra.Backend.App
         private static async Task HandleCreateAiClip(JsonElement message)
         {
             Log.Information($"{message}");
-            message.TryGetProperty("FileName", out JsonElement fileNameElement);
-            await AiService.CreateHighlight(fileNameElement.GetString()!);
+            message.TryGetProperty("Id", out JsonElement idElement);
+            await AiService.CreateHighlight(idElement.GetString()!);
         }
 
         private static async Task HandleCompressVideo(JsonElement message)
         {
             Log.Information($"CompressVideo: {message}");
-            message.TryGetProperty("FilePath", out JsonElement filePathElement);
-            await CompressionService.CompressVideo(filePathElement.GetString()!);
+
+            if (message.TryGetProperty("Id", out JsonElement idElement))
+            {
+                string id = idElement.GetString()!;
+                Content? content = AppState.Instance.Content.FirstOrDefault(c => c.Id == id);
+
+                if (content != null)
+                {
+                    await CompressionService.CompressVideo(content);
+                }
+                else
+                {
+                    Log.Warning($"Content not found in state for compression: {id}");
+                }
+            }
+            else
+            {
+                Log.Error("Id property not found in CompressVideo message.");
+            }
         }
 
         private static async Task HandleCreateClip(JsonElement message)
@@ -566,26 +571,23 @@ namespace Segra.Backend.App
                 foreach (var segmentElement in segmentsElement.EnumerateArray())
                 {
                     if (segmentElement.TryGetProperty("id", out JsonElement idElement) &&
+                        segmentElement.TryGetProperty("contentId", out JsonElement contentIdElement) &&
                         segmentElement.TryGetProperty("startTime", out JsonElement startTimeElement) &&
-                        segmentElement.TryGetProperty("endTime", out JsonElement endTimeElement) &&
-                        segmentElement.TryGetProperty("fileName", out JsonElement fileNameElement) &&
-                        segmentElement.TryGetProperty("type", out JsonElement videoTypeElement) &&
-                        segmentElement.TryGetProperty("game", out JsonElement gameElement) &&
-                        segmentElement.TryGetProperty("title", out JsonElement titleElement))
+                        segmentElement.TryGetProperty("endTime", out JsonElement endTimeElement))
                     {
                         long id = idElement.GetInt64();
+                        string contentId = contentIdElement.GetString()!;
                         double startTime = startTimeElement.GetDouble();
                         double endTime = endTimeElement.GetDouble();
-                        string fileName = fileNameElement.GetString()!;
-                        string type = videoTypeElement.GetString()!;
-                        string game = gameElement.GetString()!;
-                        string title = titleElement.GetString() ?? string.Empty;
-                        int? igdbId = segmentElement.TryGetProperty("igdbId", out JsonElement igdbIdElement) && igdbIdElement.ValueKind == JsonValueKind.Number
-                            ? igdbIdElement.GetInt32()
-                            : null;
-                        string? filePath = segmentElement.TryGetProperty("filePath", out JsonElement filePathElement)
-                            ? filePathElement.GetString()
-                            : null;
+
+                        Content? content = AppState.Instance.Content.FirstOrDefault(c => c.Id == contentId);
+
+                        if (content == null)
+                        {
+                            Log.Warning($"Content not found in state for segment: {contentId}");
+                            continue;
+                        }
+
                         List<int>? mutedAudioTracks = null;
                         if (segmentElement.TryGetProperty("mutedAudioTracks", out JsonElement mutedEl)
                             && mutedEl.ValueKind == JsonValueKind.Array)
@@ -607,14 +609,15 @@ namespace Segra.Backend.App
                         segments.Add(new Segment
                         {
                             Id = id,
-                            Type = type,
+                            Type = content.Type.ToString(),
+                            ContentId = content.Id,
                             StartTime = startTime,
                             EndTime = endTime,
-                            FileName = fileName,
-                            FilePath = filePath,
-                            Game = game,
-                            Title = title,
-                            IgdbId = igdbId,
+                            FileName = content.FileName,
+                            FilePath = content.FilePath,
+                            Game = content.Game,
+                            Title = content.Title,
+                            IgdbId = content.IgdbId,
                             MutedAudioTracks = mutedAudioTracks,
                             AudioTrackVolumes = audioTrackVolumes
                         });

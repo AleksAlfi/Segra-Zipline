@@ -17,16 +17,16 @@ namespace Segra.Backend.Media
         /// Creates a highlight video from all highlight-worthy bookmarks (Kill, Goal, etc.).
         /// Uses stream copy for fast extraction without re-encoding.
         /// </summary>
-        public static async Task CreateHighlightFromBookmarks(string fileName, Action<int, string>? progressCallback = null)
+        public static async Task CreateHighlightFromBookmarks(string contentId, Action<int, string>? progressCallback = null)
         {
             try
             {
-                Log.Information($"Starting highlight creation for: {fileName}");
+                Log.Information($"Starting highlight creation for: {contentId}");
 
-                Content? content = AppState.Instance.Content.FirstOrDefault(x => x.FileName == fileName);
+                Content? content = AppState.Instance.Content.FirstOrDefault(x => x.Id == contentId);
                 if (content == null)
                 {
-                    Log.Warning($"No content found matching fileName: {fileName}");
+                    Log.Warning($"No content found matching id: {contentId}");
                     return;
                 }
 
@@ -37,7 +37,7 @@ namespace Segra.Backend.Media
 
                 if (highlightBookmarks.Count == 0)
                 {
-                    Log.Information($"No highlight bookmarks found for: {fileName}");
+                    Log.Information($"No highlight bookmarks found for: {content.FileName}");
                     progressCallback?.Invoke(-1, "No highlight moments found in this session");
                     return;
                 }
@@ -79,12 +79,13 @@ namespace Segra.Backend.Media
 
                 progressCallback?.Invoke(10, "Extracting clips...");
 
-                // Extract and concatenate segments using stream copy
+                // Extract and concatenate segments using stream copy - preserve source audio track names
                 bool success = await ExtractAndConcatenateSegments(
                     inputFilePath,
                     outputFilePath,
                     mergedSegments,
-                    (progress, message) => progressCallback?.Invoke(10 + (int)(progress * 80), message)
+                    (progress, message) => progressCallback?.Invoke(10 + (int)(progress * 80), message),
+                    content.AudioTrackNames
                 );
 
                 if (!success || !File.Exists(outputFilePath))
@@ -101,13 +102,13 @@ namespace Segra.Backend.Media
 
                 // Create metadata, thumbnail, and waveform.
                 // Highlights use stream-copy extract+concat, so they preserve the source's audio tracks.
-                await ContentService.CreateMetadataFile(outputFilePath, Content.ContentType.Highlight, content.Game!, null, content.Title, igdbId: content.IgdbId, audioTrackNames: content.AudioTrackNames);
+                string? highlightId = await ContentService.CreateMetadataFile(outputFilePath, Content.ContentType.Highlight, content.Game!, null, content.Title, igdbId: content.IgdbId, audioTrackNames: content.AudioTrackNames, audioTrackTypes: content.AudioTrackTypes, gameExePath: content.GameExePath);
 
                 progressCallback?.Invoke(95, "Creating thumbnail...");
-                await ContentService.CreateThumbnail(outputFilePath, Content.ContentType.Highlight);
+                await ContentService.CreateThumbnail(outputFilePath, Content.ContentType.Highlight, highlightId);
 
                 progressCallback?.Invoke(98, "Creating waveform...");
-                await ContentService.CreateWaveformFile(outputFilePath, Content.ContentType.Highlight);
+                await ContentService.CreateWaveformFile(outputFilePath, Content.ContentType.Highlight, highlightId);
 
                 // Load silently then await the state send before "Done" removes the loading card, so the
                 // highlight is on screen first (avoids a skeleton-removed-before-content flicker).
@@ -119,7 +120,7 @@ namespace Segra.Backend.Media
             }
             catch (Exception ex)
             {
-                Log.Error(ex, $"Error creating highlight for {fileName}");
+                Log.Error(ex, $"Error creating highlight for {contentId}");
                 progressCallback?.Invoke(-1, $"Error: {ex.Message}");
             }
         }
@@ -137,7 +138,8 @@ namespace Segra.Backend.Media
             string inputFilePath,
             string outputFilePath,
             List<TimeSegment> segments,
-            Action<double, string>? progressCallback = null)
+            Action<double, string>? progressCallback = null,
+            List<string>? audioTrackNames = null)
         {
             if (!FFmpegService.FFmpegExists())
             {
@@ -168,16 +170,30 @@ namespace Segra.Backend.Media
 
                     progressCallback?.Invoke(processedDuration / totalDuration, $"Extracting clip {i + 1} of {segments.Count}");
 
-                    var arguments = new[]
+                    var arguments = new List<string>
                     {
                         "-y",
                         "-ss", segment.StartTime.ToString(CultureInfo.InvariantCulture),
                         "-t", segmentDuration.ToString(CultureInfo.InvariantCulture),
                         "-i", inputFilePath,
+                        "-map", "0",
                         "-c", "copy",
                         "-avoid_negative_ts", "make_zero",
-                        tempFile
                     };
+                    // Preserve OBS track names (trak/udta/name) which ffmpeg's stream copy drops by default.
+                    if (audioTrackNames != null)
+                    {
+                        for (int t = 0; t < audioTrackNames.Count; t++)
+                        {
+                            var name = audioTrackNames[t];
+                            if (!string.IsNullOrWhiteSpace(name))
+                            {
+                                arguments.Add($"-metadata:s:a:{t}");
+                                arguments.Add($"title={name}");
+                            }
+                        }
+                    }
+                    arguments.Add(tempFile);
 
                     await FFmpegService.RunSimple(arguments);
 
@@ -211,17 +227,29 @@ namespace Segra.Backend.Media
                 var concatLines = tempFiles.Select(FFmpegService.BuildConcatListLine);
                 await File.WriteAllLinesAsync(concatFilePath, concatLines);
 
-                // Concatenate all segments using stream copy
-                var concatArguments = new[]
+                var concatArguments = new List<string>
                 {
                     "-y",
                     "-f", "concat",
                     "-safe", "0",
                     "-i", concatFilePath,
+                    "-map", "0",
                     "-c", "copy",
                     "-movflags", "+faststart",
-                    outputFilePath
                 };
+                if (audioTrackNames != null)
+                {
+                    for (int t = 0; t < audioTrackNames.Count; t++)
+                    {
+                        var name = audioTrackNames[t];
+                        if (!string.IsNullOrWhiteSpace(name))
+                        {
+                            concatArguments.Add($"-metadata:s:a:{t}");
+                            concatArguments.Add($"title={name}");
+                        }
+                    }
+                }
+                concatArguments.Add(outputFilePath);
                 await FFmpegService.RunSimple(concatArguments);
 
                 progressCallback?.Invoke(1.0, "Done");

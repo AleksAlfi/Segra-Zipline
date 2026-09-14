@@ -5,11 +5,13 @@ export type RecordingMode = 'Session' | 'Buffer' | 'Hybrid';
 export type DisplayCaptureMethod = 'Auto' | 'DXGI' | 'WGC';
 
 export type AudioOutputMode = 'All' | 'GameOnly' | 'GameAndDiscord';
+export type AudioTrackType = 'mix' | 'input' | 'output';
 
 export type StartupWindowMode = 'Normal' | 'Minimized';
 export type CloseButtonAction = 'Minimize' | 'Exit';
 
 export interface Content {
+  id: string;
   type: ContentType;
   title: string;
   game: string;
@@ -22,8 +24,11 @@ export interface Content {
   createdAt: string;
   uploadId?: string;
   igdbId?: number;
+  gameExePath?: string;
   isImported: boolean;
+  compressed: boolean;
   audioTrackNames?: string[];
+  audioTrackTypes?: AudioTrackType[];
 }
 
 export interface OBSVersion {
@@ -125,6 +130,8 @@ export interface Display {
   deviceName: string;
   isPrimary: boolean;
   isHdr: boolean; // Display is currently in HDR mode (Windows "Use HDR" enabled)
+  width: number; // Current resolution width
+  height: number; // Current resolution height
 }
 
 export interface Codec {
@@ -251,7 +258,7 @@ export const DEFAULT_MENU_ITEMS: MenuItemPreference[] = [
   { id: 'Settings', visible: true },
 ];
 
-export const MENU_ITEM_CONTENT_TYPES: Record<MenuItemId, ContentType[]> = {
+const MENU_ITEM_CONTENT_TYPES: Record<MenuItemId, ContentType[]> = {
   'Full Sessions': ['Session'],
   'Replay Buffer': ['Buffer'],
   Clips: ['Clip'],
@@ -313,8 +320,10 @@ export interface Settings {
   clipAudioQuality: ClipAudioQuality;
   clipPreset: ClipPreset;
   clipKeepSeparateAudioTracks: boolean;
+  copyCompressSizesMb: number[]; // Hidden setting (no UI), sizes for "Copy as X MB"
   keybindings: Keybind[];
   games: GameSetting[];
+  autoRecordGames: boolean; // When false, don't auto-start recording when a game launches
   gameIntegrations: GameIntegrations;
   soundEffectsVolume: number; // Volume for UI sound effects (0.0 to 1.0)
   showNewBadgeOnVideos: boolean;
@@ -327,7 +336,6 @@ export interface Settings {
   confirmBeforeDeleting: boolean;
   removeOriginalAfterCompression: boolean;
   discardSessionsWithoutBookmarks: boolean;
-  disableWindowsGameMode: boolean; // When true, ensures Windows Game Mode stays off on startup
   menuItems: MenuItemPreference[];
   defaultMenuItem: MenuItemId;
 }
@@ -399,6 +407,7 @@ export const initialSettings: Settings = {
   clipAudioQuality: '128k',
   clipPreset: 'veryfast',
   clipKeepSeparateAudioTracks: false,
+  copyCompressSizesMb: [20, 50, 100, 500],
   soundEffectsVolume: 1,
   showNewBadgeOnVideos: false,
   showGameBackground: true,
@@ -410,7 +419,6 @@ export const initialSettings: Settings = {
   confirmBeforeDeleting: false,
   removeOriginalAfterCompression: false,
   discardSessionsWithoutBookmarks: false,
-  disableWindowsGameMode: false,
   menuItems: DEFAULT_MENU_ITEMS,
   defaultMenuItem: 'Full Sessions',
   keybindings: [
@@ -420,6 +428,7 @@ export const initialSettings: Settings = {
     { keys: [122], action: KeybindAction.TogglePreview, enabled: true }, // 122 is F11
   ],
   games: [],
+  autoRecordGames: true,
   gameIntegrations: {
     counterStrike2: { enabled: true },
     leagueOfLegends: { enabled: true },
@@ -436,6 +445,7 @@ export const initialSettings: Settings = {
 
 export interface Segment {
   id: number;
+  contentId: string;
   type: ContentType;
   startTime: number;
   endTime: number;
@@ -459,6 +469,7 @@ export interface SegmentCardProps {
   setHoveredSegmentId: (id: number | null) => void;
   removeSegment: (id: number) => void;
   audioTrackNames?: string[];
+  audioTrackTypes?: AudioTrackType[];
   onMutedAudioTracksChange?: (id: number, mutedTracks: number[]) => void;
   onAudioTrackVolumesChange?: (id: number, volumes: Record<number, number>) => void;
 }
