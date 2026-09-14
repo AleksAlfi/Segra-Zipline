@@ -85,6 +85,32 @@ namespace Segra.Backend.Windows.Input
 #endif
         }
 
+#if WINDOWS
+        /// <summary>
+        /// Stops the broker instead of leaving it to idle out. Pass <paramref name="exitTimeout"/> to
+        /// wait for it, which updates need because it can pin the install directory.
+        /// </summary>
+        public static void ShutdownBroker(TimeSpan? exitTimeout = null)
+        {
+            HotkeyBrokerClient? client;
+            lock (_lock)
+            {
+                client = _brokerClient;
+                _brokerClient = null;
+                _brokerActive = false;
+            }
+
+            if (client is not null)
+            {
+                client.StateChanged -= OnBrokerStateChanged;
+                client.ActionFired -= HandleKeybindAction;
+                client.Dispose();
+            }
+
+            HotkeyBrokerShutdown.RequestShutdown(exitTimeout);
+        }
+#endif
+
         /// <summary>
         /// Re-applies the current keybindings to whichever source is active. Call whenever
         /// <c>Settings.Instance.Keybindings</c> changes.
