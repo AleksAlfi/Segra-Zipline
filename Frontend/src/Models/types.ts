@@ -2,8 +2,6 @@ export type ContentType = 'Session' | 'Buffer' | 'Clip' | 'Highlight';
 
 export type RecordingMode = 'Session' | 'Buffer' | 'Hybrid';
 
-export type DisplayCaptureMethod = 'Auto' | 'DXGI' | 'WGC';
-
 export type AudioOutputMode = 'All' | 'GameOnly' | 'GameAndDiscord';
 export type AudioTrackType = 'mix' | 'input' | 'output';
 
@@ -37,6 +35,14 @@ export interface OBSVersion {
   url: string;
 }
 
+export interface HotkeyBrokerStatus {
+  installed: boolean;
+  upToDate: boolean;
+  connected: boolean;
+  // An install or update is needed and the automatic attempt was declined or failed.
+  actionRequired: boolean;
+}
+
 export interface State {
   gpuVendor: GpuVendor;
   preRecording?: PreRecording;
@@ -51,10 +57,13 @@ export interface State {
   isCheckingForUpdates: boolean;
   gameList: GameListEntry[];
   maxDisplayHeight: number;
+  maxAudioTracks: number;
   currentFolderSizeGb: number;
   recordingDriveUsedGb: number | null;
   recordingDriveFreeGb: number | null;
   cacheFolder: string;
+  // Windows only; the backend leaves it unset elsewhere.
+  hotkeyBroker?: HotkeyBrokerStatus | null;
 }
 
 export enum GpuVendor {
@@ -104,6 +113,7 @@ export interface Recording {
   endTime: Date;
   game: string;
   isUsingGameHook: boolean;
+  isUsingWindowCapture: boolean;
   coverImageId?: string;
 }
 
@@ -293,14 +303,15 @@ export interface Settings {
   forceMonoInputSources: boolean;
   inputNoiseSuppression: boolean;
   selectedDisplay: Display | null;
-  displayCaptureMethod: DisplayCaptureMethod;
   selectedOBSVersion: string | null; // null means automatic (latest non-beta)
+  hotkeyBrokerDeclinedVersion: string | null; // backend-owned, mirrored only
   enableAi: boolean;
   autoGenerateHighlights: boolean;
   runOnStartup: boolean;
   startupWindowMode: StartupWindowMode; // Window state when launched from startup
   closeButtonAction: CloseButtonAction;
   receiveBetaUpdates: boolean;
+  autoInstallUpdates: boolean; // Install a downloaded update once nothing records and the window is closed
   airplaneMode: boolean; // Hides cloud account/login/upload features and signs the user out
   recordingMode: RecordingMode;
   replayBufferDuration: number; // in seconds
@@ -353,6 +364,7 @@ export const initialState: State = {
   isCheckingForUpdates: false,
   gameList: [],
   maxDisplayHeight: 1080,
+  maxAudioTracks: 6,
   currentFolderSizeGb: 0,
   recordingDriveUsedGb: null,
   recordingDriveFreeGb: null,
@@ -380,14 +392,15 @@ export const initialSettings: Settings = {
   forceMonoInputSources: false,
   inputNoiseSuppression: true,
   selectedDisplay: null, // Default to null (auto-select)
-  displayCaptureMethod: 'Auto',
   selectedOBSVersion: null, // null means automatic (latest non-beta)
+  hotkeyBrokerDeclinedVersion: null,
   enableAi: true,
   autoGenerateHighlights: true,
   runOnStartup: false,
   startupWindowMode: 'Minimized',
   closeButtonAction: 'Minimize',
   receiveBetaUpdates: false,
+  autoInstallUpdates: true,
   airplaneMode: false,
   recordingMode: 'Hybrid',
   replayBufferDuration: 30,

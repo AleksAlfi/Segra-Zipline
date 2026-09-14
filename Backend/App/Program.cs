@@ -51,7 +51,6 @@ namespace Segra.Backend.App
         [DllImport("kernel32.dll")]
         static extern uint GetCurrentThreadId();
 
-        const int SW_HIDE = 0;
         const int SW_RESTORE = 9;
         const int SM_CXFULLSCREEN = 16;
         const int SM_CYFULLSCREEN = 17;
@@ -75,6 +74,16 @@ namespace Segra.Backend.App
         [STAThread]
         static void Main(string[] args)
         {
+#if WINDOWS
+            // Elevated helper mode: install the UIAccess hotkey broker, then exit. Runs before logging
+            // (the main instance holds the log file) and before the single-instance handshake.
+            if (args.Contains(Segra.Backend.Windows.Input.HotkeyBroker.HotkeyBrokerInstaller.InstallArgument))
+            {
+                Environment.ExitCode = Segra.Backend.Windows.Input.HotkeyBroker.HotkeyBrokerInstaller.RunInstallElevated();
+                return;
+            }
+#endif
+
             PlatformServices.Initialize();
 
 #if WINDOWS
@@ -109,6 +118,8 @@ namespace Segra.Backend.App
                 Console.WriteLine($"[DEBUG] Failed to kill existing instance: {ex.Message}");
             }
 #endif
+
+            WaitForPreviousInstance();
 
             // Try to create a named mutex - this will fail if another instance exists
             singleInstanceMutex = new Mutex(true, "SegraApplicationMutex", out bool createdNew);
@@ -196,8 +207,9 @@ namespace Segra.Backend.App
                 // VS Code sets SEGRA_VSCODE=1 via launch.json; Visual Studio does not.
                 // In VS Code the Vite dev server runs separately, so PhotinoServer is not needed
                 // and its RunAsync() would otherwise open a spurious browser tab.
-                bool IsVSCodeDebug = Environment.GetEnvironmentVariable("SEGRA_VSCODE") == "1";
+                // A child process (self-restart) inherits the variable without the debugger, so require both.
                 bool IsDebugMode = Debugger.IsAttached;
+                bool IsVSCodeDebug = IsDebugMode && Environment.GetEnvironmentVariable("SEGRA_VSCODE") == "1";
 
                 string baseUrl = string.Empty;
                 if (!IsVSCodeDebug)
@@ -327,11 +339,11 @@ namespace Segra.Backend.App
                 // Check for updates
                 Task.Run(() => UpdateService.UpdateAppIfNecessary(forceCheck: true));
 
-                // Check if application was launched from startup. Only minimize to tray when the
-                // user has chosen the Minimized startup window mode; otherwise open normally.
-                bool startMinimized = IsLaunchedFromStartup() &&
-                    Settings.Instance.StartupWindowMode == StartupWindowMode.Minimized;
-                Log.Information($"Starting application{(startMinimized ? " minimized from startup" : "")}");
+                // Minimize to tray when relaunched after an automatic update, or when launched from
+                // startup with the Minimized startup window mode; otherwise open normally.
+                bool startMinimized = Environment.GetCommandLineArgs().Contains(UpdateService.RestartMinimizedArg)
+                    || (IsLaunchedFromStartup() && Settings.Instance.StartupWindowMode == StartupWindowMode.Minimized);
+                Log.Information($"Starting application{(startMinimized ? " minimized" : "")}");
 
                 // Tray icon (WinForms NotifyIcon on Windows; no-op on Linux)
                 PlatformServices.Tray.Initialize(
@@ -354,23 +366,33 @@ namespace Segra.Backend.App
                 Task.Run(() => OBSService.InitializeAsync());
 #endif
 
+                // The message loop outlives every window, so closing to tray can destroy the
+                // webview (and its ~275MB of processes) instead of just hiding it.
+                App = new PhotinoApplication
+                {
+                    NotificationsEnabled = false, // Notifications disabled due to it creating a second start menu entry with incorrect start path. See https://github.com/tryphotino/photino.NET/issues/85
+                    ShutdownMode = PhotinoShutdownMode.OnExplicitShutdown
+                };
+
                 if (!startMinimized)
                 {
-                    LoadFrontend();
+                    App.Startup += (sender, eventArgs) => CreateWindow();
                 }
 
-                // Wait for show window events
-                while (true)
+                // ShowWindowEvent is signalled from the single-instance pipe thread.
+                var showWindowThread = new Thread(() =>
                 {
-                    int signalIndex = WaitHandle.WaitAny([ShowWindowEvent]);
-                    Log.Information($"Signal received: {signalIndex}");
-                    if (signalIndex == 0)
+                    while (true)
                     {
+                        ShowWindowEvent.WaitOne();
                         Log.Information("Show window event triggered");
-                        ShowApplicationWindow().GetAwaiter().GetResult();
-                        Log.Information("Show window event completed");
+                        _ = ShowApplicationWindow();
                     }
-                }
+                })
+                { IsBackground = true, Name = "ShowWindowSignal" };
+                showWindowThread.Start();
+
+                App.Run(null);
             }
             catch (Exception ex)
             {
@@ -440,6 +462,95 @@ namespace Segra.Backend.App
             }
         }
 
+        public const string AwaitPidArg = "--await-pid";
+        private const int RestartShutdownWaitMs = 10000;
+        private static int _restarting;
+
+        // A restarted instance waits for its predecessor to exit instead of handing off to it through the pipe.
+        private static void WaitForPreviousInstance()
+        {
+            string[] args = Environment.GetCommandLineArgs();
+            int index = Array.IndexOf(args, AwaitPidArg);
+            if (index < 0 || index + 1 >= args.Length || !int.TryParse(args[index + 1], out int pid))
+                return;
+
+            try
+            {
+                using var previous = Process.GetProcessById(pid);
+                if (!previous.WaitForExit(RestartShutdownWaitMs + 5000))
+                {
+                    // It already decided to exit; finish the job so this instance can take over.
+                    previous.Kill();
+                    previous.WaitForExit(5000);
+                }
+            }
+            catch (Exception)
+            {
+                // Already gone.
+            }
+        }
+
+        // Relaunches Segra and exits. libobs may be wedged, so shutdown gets a bounded wait and the exit is unconditional.
+        public static void Restart(string reason, bool minimized)
+        {
+            if (Interlocked.Exchange(ref _restarting, 1) == 1)
+                return;
+
+            Log.Information($"Restarting Segra: {reason}");
+            if (!LaunchSuccessor(minimized))
+            {
+                Interlocked.Exchange(ref _restarting, 0);
+                return;
+            }
+
+            if (!Task.Run(Shutdown).Wait(RestartShutdownWaitMs))
+                Log.Warning($"Shutdown did not finish within {RestartShutdownWaitMs / 1000}s; exiting anyway");
+
+            Environment.Exit(0);
+        }
+
+        // For libobs's crash handler: the process is already dying on the crashing thread, so no shutdown and no libobs calls.
+        public static void ExitAfterCrash(string reason, bool minimized)
+        {
+            Log.Fatal($"Fatal recorder error, relaunching Segra: {reason}");
+            if (Interlocked.Exchange(ref _restarting, 1) == 0)
+                LaunchSuccessor(minimized);
+
+            Log.CloseAndFlush();
+            Process.GetCurrentProcess().Kill();
+        }
+
+        private static bool LaunchSuccessor(bool minimized)
+        {
+            string? exePath = Environment.ProcessPath;
+            if (exePath == null)
+            {
+                Log.Error("Cannot restart: process path is unknown");
+                return false;
+            }
+
+            try
+            {
+                var startInfo = new ProcessStartInfo(exePath)
+                {
+                    UseShellExecute = false,
+                    WorkingDirectory = Path.GetDirectoryName(exePath) ?? AppContext.BaseDirectory
+                };
+                startInfo.ArgumentList.Add(AwaitPidArg);
+                startInfo.ArgumentList.Add(Environment.ProcessId.ToString());
+                if (minimized)
+                    startInfo.ArgumentList.Add(UpdateService.RestartMinimizedArg);
+
+                Process.Start(startInfo);
+                return true;
+            }
+            catch (Exception ex)
+            {
+                Log.Error(ex, "Failed to launch the new Segra instance; staying up");
+                return false;
+            }
+        }
+
         private static void Shutdown()
         {
             Log.Information("Application shutting down.");
@@ -451,21 +562,16 @@ namespace Segra.Backend.App
 
             // Stop any active recording first so OBS finalizes the file cleanly. Task.Run + block keeps
             // the awaits off the tray thread, whose WinForms SynchronizationContext would otherwise deadlock.
-            if (AppState.Instance.Recording != null || AppState.Instance.PreRecording != null)
+            // Skipped when the recorder is known to be dead: there is nothing to finalize and the stop may never return.
+            bool recorderLost = RecorderHealthService.IsRecorderLost;
+            if (!recorderLost && (AppState.Instance.Recording != null || AppState.Instance.PreRecording != null))
             {
                 Log.Information("Active recording detected during shutdown; stopping it before exit.");
-                try
-                {
-                    Task.Run(() => OBSService.StopRecording()).GetAwaiter().GetResult();
-                }
-                catch (Exception ex)
-                {
-                    Log.Error(ex, "Error stopping recording during shutdown");
-                }
+                OBSService.TryStopRecording(TimeSpan.FromSeconds(15));
             }
 
             // Shutdown OBS if it was initialized
-            OBSService.Shutdown();
+            OBSService.TryShutdown(TimeSpan.FromSeconds(recorderLost ? 5 : 10));
 
             Log.CloseAndFlush(); // Ensure all logs are written before the application exits
 
@@ -544,21 +650,15 @@ namespace Segra.Backend.App
             Log.Information("Showing application window. Window is " + (Window == null ? "null" : "not null"));
             if (Window == null)
             {
-                // Schedule the foreground operations with a delay before calling LoadFrontend
-                _ = Task.Run(async () =>
-                {
-                    await Task.Delay(200);
-                    Log.Information("Bringing application window to foreground from scheduled task");
-                    await BringWindowToForegroundAsync();
-                });
+                if (App == null)
+                    return;
 
-                LoadFrontend();
+                // Native windows must all be created on the thread that created the first one.
+                // InvokeAsync so the WinForms tray thread never blocks on the dispatcher.
+                await App.Dispatcher.InvokeAsync(CreateWindow);
             }
-            else
-            {
-                Log.Information("Bringing application window to foreground. Window is not null");
-                await BringWindowToForegroundAsync();
-            }
+
+            await BringWindowToForegroundAsync();
         }
 
         public static void BringWindowToFront() => _ = ShowApplicationWindow();
@@ -598,19 +698,9 @@ namespace Segra.Backend.App
 #endif
         }
 
-        private static void HideApplicationWindow()
-        {
-            Window?.SetMinimized(true);
+        private static Stopwatch _windowCreateStopwatch = new();
 
-#if WINDOWS
-            IntPtr hWnd = Process.GetCurrentProcess().MainWindowHandle;
-            ShowWindow(hWnd, SW_HIDE); // Hides the window from the taskbar
-#endif
-
-            Log.Information("Application window hidden");
-        }
-
-        private static void LoadFrontend()
+        private static void CreateWindow()
         {
             Log.Information("Loading frontend, app url is " + appUrl);
 
@@ -635,8 +725,7 @@ namespace Segra.Backend.App
                 restoreMaximized = savedState.Maximized;
             }
 
-            // Initialize the PhotinoWindow
-            App ??= new PhotinoApplication { NotificationsEnabled = false }; // Disabled due to it creating a second start menu entry with incorrect start path. See https://github.com/tryphotino/photino.NET/issues/85
+            _windowCreateStopwatch = Stopwatch.StartNew();
             var windowBuilder = new PhotinoWindow();
 #if WINDOWS
             // Chromium/WebView2-only flags; WebKitGTK on Linux parses these natively and crashes on the
@@ -681,7 +770,8 @@ namespace Segra.Backend.App
                 .RegisterWebMessageReceivedHandler((sender, args) =>
                 {
                     Window = (PhotinoWindow)sender!;
-                    _ = MessageService.HandleMessage(args.Message);
+                    // Web messages arrive on the UI thread; keep handlers off it so a blocking call can't freeze the window.
+                    _ = Task.Run(() => MessageService.HandleMessage(args.Message));
                 })
                 .Load(appUrl!);
 
@@ -720,19 +810,21 @@ namespace Segra.Backend.App
 
             Window.RegisterClosingHandler((sender, e) =>
             {
-                e.Cancel = true;
                 if (Settings.Instance.CloseButtonAction == CloseButtonAction.Exit)
                 {
+                    e.Cancel = true;
                     Shutdown();
                     Environment.Exit(0);
                     return;
                 }
 
                 SaveWindowState();
-                HideApplicationWindow();
+                Window = null;
+                Log.Information("Application window closing to tray");
             });
 
-            App.Run(Window);
+            Window.Show();
+            Log.Information("Window shown in {Elapsed}ms", _windowCreateStopwatch.ElapsedMilliseconds);
         }
 
         private static Size GetDefaultWindowSize()

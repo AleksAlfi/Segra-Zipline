@@ -687,13 +687,6 @@ namespace Segra.Backend.Core
                 hasChanges = true;
             }
 
-            if (settings.DisplayCaptureMethod != updatedSettings.DisplayCaptureMethod)
-            {
-                Log.Information($"DisplayCaptureMethod changed from '{settings.DisplayCaptureMethod}' to '{updatedSettings.DisplayCaptureMethod}'");
-                settings.DisplayCaptureMethod = updatedSettings.DisplayCaptureMethod;
-                hasChanges = true;
-            }
-
             if (settings.EnableAi != updatedSettings.EnableAi)
             {
                 Log.Information($"EnableAi changed from '{settings.EnableAi}' to '{updatedSettings.EnableAi}'");
@@ -729,6 +722,13 @@ namespace Segra.Backend.Core
                 hasChanges = true;
                 _ = Task.Run(() => UpdateService.UpdateAppIfNecessary(forceCheck: true));
                 _ = Task.Run(() => UpdateService.GetReleaseNotes(forceCheck: true));
+            }
+
+            if (settings.AutoInstallUpdates != updatedSettings.AutoInstallUpdates)
+            {
+                Log.Information($"AutoInstallUpdates changed from '{settings.AutoInstallUpdates}' to '{updatedSettings.AutoInstallUpdates}'");
+                settings.AutoInstallUpdates = updatedSettings.AutoInstallUpdates;
+                hasChanges = true;
             }
 
             if (settings.RunOnStartup != updatedSettings.RunOnStartup)
@@ -1038,6 +1038,7 @@ namespace Segra.Backend.Core
         /// </summary>
         public static async Task MigrateCacheFolder(string oldCacheFolder, string newCacheFolder)
         {
+            using var work = BackgroundWork.Begin();
             if (string.IsNullOrEmpty(oldCacheFolder) || string.IsNullOrEmpty(newCacheFolder))
             {
                 Log.Warning("Cannot migrate cache: old or new folder path is empty");

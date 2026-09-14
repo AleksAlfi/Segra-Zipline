@@ -37,13 +37,13 @@ namespace Segra.Backend.Core.Models
         private string _encoder = "gpu";
         private Codec? _codec = null; // Set in SelectDefaultCodec()
         private string? _selectedOBSVersion = null; // null means automatic (latest non-beta)
+        private string? _hotkeyBrokerDeclinedVersion = null; // bundled broker version whose install was declined or failed
         private bool _pendingOBSUpdate = false;
         private int _storageLimit = 100;
         private List<DeviceSetting> _inputDevices = new List<DeviceSetting>();
         private List<DeviceSetting> _outputDevices = new List<DeviceSetting>();
         private bool _forceMonoInputSources = false;
         private Display? _selectedDisplay = null;
-        private DisplayCaptureMethod _displayCaptureMethod = DisplayCaptureMethod.Auto;
         private WindowState? _lastWindowState = null;
         private bool _enableAi = true;
         private bool _autoGenerateHighlights = true;
@@ -53,6 +53,7 @@ namespace Segra.Backend.Core.Models
         private StartupWindowMode _startupWindowMode = StartupWindowMode.Minimized;
         private CloseButtonAction _closeButtonAction = CloseButtonAction.Minimize;
         private bool _receiveBetaUpdates = false;
+        private bool _autoInstallUpdates = true;
         private bool _airplaneMode = false;
         private RecordingMode _recordingMode = RecordingMode.Hybrid;
         private int _replayBufferDuration = 30;
@@ -355,19 +356,6 @@ namespace Segra.Backend.Core.Models
             }
         }
 
-        [JsonPropertyName("displayCaptureMethod")]
-        public DisplayCaptureMethod DisplayCaptureMethod
-        {
-            get => _displayCaptureMethod;
-            set
-            {
-                if (_displayCaptureMethod != value)
-                {
-                    _displayCaptureMethod = value;
-                }
-            }
-        }
-
         // Last known main-window position, restored on next launch. Backend-only.
         [JsonPropertyName("lastWindowState")]
         public WindowState? LastWindowState
@@ -491,6 +479,19 @@ namespace Segra.Backend.Core.Models
                 if (_receiveBetaUpdates != value)
                 {
                     _receiveBetaUpdates = value;
+                }
+            }
+        }
+
+        [JsonPropertyName("autoInstallUpdates")]
+        public bool AutoInstallUpdates
+        {
+            get => _autoInstallUpdates;
+            set
+            {
+                if (_autoInstallUpdates != value)
+                {
+                    _autoInstallUpdates = value;
                 }
             }
         }
@@ -956,6 +957,21 @@ namespace Segra.Backend.Core.Models
             }
         }
 
+        // Backend-owned: set when the automatic hotkey broker install is declined or fails, so the
+        // prompt is not repeated for the same broker version. Not applied from frontend updates.
+        [JsonPropertyName("hotkeyBrokerDeclinedVersion")]
+        public string? HotkeyBrokerDeclinedVersion
+        {
+            get => _hotkeyBrokerDeclinedVersion;
+            set
+            {
+                if (_hotkeyBrokerDeclinedVersion != value)
+                {
+                    _hotkeyBrokerDeclinedVersion = value;
+                }
+            }
+        }
+
         [JsonPropertyName("pendingOBSUpdate")]
         public bool PendingOBSUpdate
         {
@@ -1130,6 +1146,9 @@ namespace Segra.Backend.Core.Models
 
         [JsonPropertyName("isUsingGameHook")]
         public bool IsUsingGameHook { get; set; }
+
+        [JsonPropertyName("isUsingWindowCapture")]
+        public bool IsUsingWindowCapture { get; set; }
 
         [JsonPropertyName("exePath")]
         public string? ExePath { get; set; }
@@ -1358,14 +1377,6 @@ namespace Segra.Backend.Core.Models
     {
         Minimize,
         Exit
-    }
-
-    [JsonConverter(typeof(JsonStringEnumConverter))]
-    public enum DisplayCaptureMethod
-    {
-        Auto,
-        DXGI,
-        WGC
     }
 
     [JsonConverter(typeof(JsonStringEnumConverter))]
