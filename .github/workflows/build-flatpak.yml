@@ -20,7 +20,7 @@ on:
       obs_version:
         description: 'OBS version to bundle into the Flatpak'
         required: false
-        default: '32.2.0'
+        default: '32.2.2'
         type: string
 
 jobs:
