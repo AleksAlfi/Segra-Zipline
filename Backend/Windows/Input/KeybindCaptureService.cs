@@ -45,7 +45,7 @@ namespace Segra.Backend.Windows.Input
         /// </summary>
         public static void Start()
         {
-#if WINDOWS
+#if WINDOWS && !DEBUG
             var client = new HotkeyBrokerClient();
             client.StateChanged += OnBrokerStateChanged;
             client.ActionFired += HandleKeybindAction;
@@ -310,7 +310,7 @@ namespace Segra.Backend.Windows.Input
                     if (recording != null || preRecording != null)
                     {
                         Log.Information("Hotkey: stopping recording");
-                        Task.Run(OBSService.StopRecording);
+                        Task.Run(() => OBSService.StopRecording());
                     }
                     else
                     {

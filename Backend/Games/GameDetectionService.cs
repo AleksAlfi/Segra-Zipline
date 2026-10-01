@@ -170,7 +170,11 @@ namespace Segra.Backend.Games
                     // If this process just started a Steam/Proton recording, remember the game's install
                     // dir so we can stop when it closes (its Wine PIDs come and go, but all share the dir).
                     if (!wasRecording && AppState.Instance.Recording != null && _recordingSteamInstallPath == null)
-                        _recordingSteamInstallPath = SteamInstallDirFromExe(exePath);
+                    {
+                        string? installDir = SteamInstallDirFromExe(exePath);
+                        if (installDir != null && AnyProcessHasSteamInstall(current, installDir))
+                            _recordingSteamInstallPath = installDir;
+                    }
                 }
 
                 if (AppState.Instance.Recording == null && AppState.Instance.PreRecording == null)
@@ -184,7 +188,7 @@ namespace Segra.Backend.Games
                     {
                         Log.Information("[OnTrackedProcessExited] Steam/Proton game closed. Stopping recording.");
                         _recordingSteamInstallPath = null;
-                        _ = Task.Run(OBSService.StopRecording);
+                        _ = Task.Run(() => OBSService.StopRecording());
                     }
                 }
                 else
@@ -249,7 +253,7 @@ namespace Segra.Backend.Games
                 if (matchesRecordingPid || matchesPreRecordingPid)
                 {
                     Log.Information($"[OnTrackedProcessExited] PID {pid} is no longer running. Stopping recording.");
-                    _ = Task.Run(OBSService.StopRecording);
+                    _ = Task.Run(() => OBSService.StopRecording(pid));
                 }
             }
             catch (Exception ex)
@@ -402,7 +406,7 @@ namespace Segra.Backend.Games
                 if (matchesFileName || matchesRecordingPid || matchesPreRecordingPid)
                 {
                     Log.Information($"[OnTrackedProcessExited] Confirmed that PID {pid} is no longer running. Stopping recording.");
-                    _ = Task.Run(OBSService.StopRecording);
+                    _ = Task.Run(() => OBSService.StopRecording(pid));
                 }
             }
             catch (Exception ex)
@@ -426,7 +430,11 @@ namespace Segra.Backend.Games
             string? coverImageId = GameUtils.GetCoverImageIdFromExePath(exePath);
 
             AppState.Instance.PreRecording = new PreRecording { Game = gameName, Status = "Waiting to start", CoverImageId = coverImageId, Pid = pid, Exe = exePath };
+#if WINDOWS
+            _ = Task.Run(() => OBSService.StartRecording(gameName, exePath, pid: pid));
+#else
             OBSService.StartRecording(gameName, exePath, pid: pid);
+#endif
         }
 
 #if WINDOWS
@@ -753,10 +761,14 @@ namespace Segra.Backend.Games
                 if (AppState.Instance.Recording != null)
                 {
                     int? recordingPid = AppState.Instance.Recording.Pid;
-                    if (recordingPid.HasValue && !IsProcessRunning(recordingPid.Value))
+                    bool trackedByInstallPath = false;
+#if !WINDOWS
+                    trackedByInstallPath = _recordingSteamInstallPath != null;
+#endif
+                    if (recordingPid.HasValue && !trackedByInstallPath && !IsProcessRunning(recordingPid.Value))
                     {
                         Log.Warning($"[ProcessCheck] Recording process PID {recordingPid} is no longer running. Stopping recording.");
-                        _ = Task.Run(OBSService.StopRecording);
+                        _ = Task.Run(() => OBSService.StopRecording(recordingPid));
                         return;
                     }
                     // Process is still running, no need to check for new games

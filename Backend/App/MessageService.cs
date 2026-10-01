@@ -243,7 +243,7 @@ namespace Segra.Backend.App
                             _ = Task.Run(() => OBSService.StartRecording(startManually: true));
                             break;
                         case "StopRecording":
-                            _ = Task.Run(OBSService.StopRecording);
+                            _ = Task.Run(() => OBSService.StopRecording());
                             break;
                         case "RefreshStorageStats":
                             StorageService.UpdateRecordingDriveSpaceInState();
@@ -442,7 +442,13 @@ namespace Segra.Backend.App
                 {
                     HttpListenerContext context = await listener.GetContextAsync();
 
-                    if (context.Request.IsWebSocketRequest)
+                    string? origin = context.Request.Headers["Origin"];
+                    if (context.Request.IsWebSocketRequest && origin != null && !Api.ContentServer.IsLocalOrigin(origin))
+                    {
+                        context.Response.StatusCode = 403;
+                        context.Response.Close();
+                    }
+                    else if (context.Request.IsWebSocketRequest)
                     {
                         Log.Information("Received WebSocket connection request");
 
@@ -956,10 +962,15 @@ namespace Segra.Backend.App
                     await SendFrontendMessage("SelectedGameExecutable", gameObject);
                     Log.Information($"Selected game executable: {filePath}{(catalogName != null ? $" (matched catalog game '{catalogName}')" : "")}");
                 }
+                else
+                {
+                    await SendFrontendMessage("SelectedGameExecutable", new { paths = Array.Empty<string>() });
+                }
             }
             catch (Exception ex)
             {
                 Log.Error($"Error selecting game executable: {ex.Message}");
+                await SendFrontendMessage("SelectedGameExecutable", new { paths = Array.Empty<string>() });
                 await ShowModal("Error", $"Failed to select game executable: {ex.Message}", "error");
             }
         }
