@@ -3,9 +3,13 @@ using Velopack;
 using System.Text;
 using System.Text.Json;
 using Velopack.Sources;
+using Segra.Backend.Shared;
 using Segra.Backend.Recorder;
 using System.Net.Http.Headers;
 using System.Text.Json.Serialization;
+#if WINDOWS
+using Segra.Backend.Windows.Input;
+#endif
 
 namespace Segra.Backend.App
 {
@@ -43,6 +47,14 @@ namespace Segra.Backend.App
         private static List<object>? _cachedReleaseNotesList = null;
         private static readonly object _updateProgressLock = new();
         private static object? _currentUpdateProgress = null;
+
+        // Passed on restart after an automatic install so the app comes back in the tray.
+        public const string RestartMinimizedArg = "--restart-minimized";
+
+        // Polls for an idle moment to install a downloaded update when AutoInstallUpdates is on.
+        private static readonly TimeSpan AutoInstallPollInterval = TimeSpan.FromMinutes(1);
+        private static System.Threading.Timer? _autoInstallTimer;
+        private static int _autoInstallStarted;
 
         private static object SetCurrentUpdateProgress(string version, int progress, string status, string message)
         {
@@ -156,6 +168,8 @@ namespace Segra.Backend.App
                     status: "ready",
                     message: $"Update to version {targetVersion} is ready to install");
 
+                StartAutoInstallTimer();
+
                 return true;
             }
             catch (Exception ex)
@@ -170,7 +184,47 @@ namespace Segra.Backend.App
             }
         }
 
-        public static void ApplyUpdate()
+        private static void StartAutoInstallTimer()
+        {
+            if (_autoInstallTimer != null)
+                return;
+
+            _autoInstallTimer = new System.Threading.Timer(_ => TryAutoInstallUpdate(), null, TimeSpan.Zero, AutoInstallPollInterval);
+        }
+
+        // Idle means nothing is recording and the window is closed, so the restart is invisible to the user.
+        private static void TryAutoInstallUpdate()
+        {
+            try
+            {
+                if (!Core.Models.Settings.Instance.AutoInstallUpdates || LatestUpdateInfo == null)
+                    return;
+
+                bool idle = Core.Models.AppState.Instance.Recording == null
+                    && Core.Models.AppState.Instance.PreRecording == null
+                    && Program.Window == null
+                    && Core.Models.AppState.Instance.HasLoadedObs
+                    && !BackgroundWork.IsBusy
+                    && !MigrationService.IsRunning;
+                if (!idle)
+                    return;
+
+                if (Interlocked.Exchange(ref _autoInstallStarted, 1) == 1)
+                    return;
+
+                _autoInstallTimer?.Dispose();
+                _autoInstallTimer = null;
+
+                Log.Information($"Installing update to version {LatestUpdateInfo.TargetFullRelease.Version} automatically while idle; Segra will restart in the tray");
+                ApplyUpdate(isAutoUpdate: true);
+            }
+            catch (Exception ex)
+            {
+                Log.Error(ex, "Automatic update install failed");
+            }
+        }
+
+        public static void ApplyUpdate(bool isAutoUpdate = false)
         {
             Log.Information("Applying update");
             if (UpdateManager == null || LatestUpdateInfo == null)
@@ -183,21 +237,34 @@ namespace Segra.Backend.App
             if (Core.Models.AppState.Instance.Recording != null || Core.Models.AppState.Instance.PreRecording != null)
             {
                 Log.Information("Active recording detected while applying update; stopping it first.");
-                try
-                {
-                    Task.Run(() => OBSService.StopRecording()).GetAwaiter().GetResult();
-                }
-                catch (Exception ex)
-                {
-                    Log.Error(ex, "Error stopping recording before applying update");
-                }
+                OBSService.TryStopRecording(TimeSpan.FromSeconds(15));
             }
 
-            // Shutdown OBS before restarting to unload graphics-hook64.dll from game processes.
-            // ApplyUpdatesAndRestart kills the process immediately, bypassing Program.Shutdown().
-            OBSService.Shutdown();
+            // Stop the broker before the swap; it outlives this process and pins the install directory.
+#if WINDOWS
+            var brokerShutdown = Task.Run(() => KeybindCaptureService.ShutdownBroker(TimeSpan.FromSeconds(20)));
+#endif
 
-            UpdateManager.ApplyUpdatesAndRestart(LatestUpdateInfo);
+            // Shutdown OBS before restarting to unload graphics-hook64.dll from game processes.
+            // Environment.Exit below kills the process immediately, bypassing Program.Shutdown().
+            OBSService.TryShutdown(TimeSpan.FromSeconds(10));
+
+#if WINDOWS
+            try
+            {
+                if (!brokerShutdown.Wait(TimeSpan.FromSeconds(25)))
+                    Log.Warning("Hotkey broker shutdown did not finish; continuing");
+            }
+            catch (Exception ex)
+            {
+                Log.Error(ex, "Error stopping the hotkey broker");
+            }
+#endif
+
+            // Auto updates run unattended: no Velopack dialogs, and Segra comes back in the tray.
+            string[]? restartArgs = isAutoUpdate ? [RestartMinimizedArg] : null;
+            UpdateManager.WaitExitThenApplyUpdates(LatestUpdateInfo, silent: isAutoUpdate, restart: true, restartArgs);
+            Environment.Exit(0);
         }
 
         private static async Task SendUpdateProgressToFrontend(string version, int progress, string status, string message)
@@ -278,6 +345,10 @@ namespace Segra.Backend.App
                     ct);
 
                 LatestUpdateInfo = updateInfo;
+
+#if WINDOWS
+                KeybindCaptureService.ShutdownBroker(TimeSpan.FromSeconds(20));
+#endif
 
                 Log.Information($"Applying force reinstall of {targetVersion}");
                 UpdateManager.ApplyUpdatesAndRestart(updateInfo.TargetFullRelease);

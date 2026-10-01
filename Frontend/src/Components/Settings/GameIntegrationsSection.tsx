@@ -1,6 +1,5 @@
-import { useSettings } from '../../Context/SettingsContext';
+import { useSettings, useSettingsUpdater } from '../../Context/SettingsContext';
 import { useAppState } from '../../Context/AppStateContext';
-import { sendMessageToBackend } from '../../Utils/MessageUtils';
 import { GameIntegrations } from '../../Models/types';
 
 interface GameIntegration {
@@ -42,6 +41,13 @@ const GAME_INTEGRATIONS: GameIntegration[] = [
     settingsKey: 'rocketLeague',
     bookmarks: ['Goals', 'Assists'],
     backgroundImage: 'https://segra.tv/api/games/cover/ar5u6d',
+  },
+  {
+    id: 'rainbow-six-siege',
+    name: 'Rainbow Six Siege',
+    settingsKey: 'rainbowSixSiege',
+    bookmarks: ['Kills', 'Deaths'],
+    backgroundImage: 'https://segra.tv/api/games/cover/ar6elp',
   },
   {
     id: 'gta',
@@ -168,11 +174,11 @@ function GameIntegrationCard({
 
 export default function GameIntegrationsSection() {
   const settings = useSettings();
+  const updateSettings = useSettingsUpdater();
   const appState = useAppState();
 
   const handleToggle = (settingsKey: GameIntegration['settingsKey'], enabled: boolean) => {
-    sendMessageToBackend('UpdateSettings', {
-      ...settings,
+    updateSettings({
       gameIntegrations: {
         ...settings.gameIntegrations,
         [settingsKey]: {

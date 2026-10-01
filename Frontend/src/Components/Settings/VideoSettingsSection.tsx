@@ -1,12 +1,9 @@
 import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import DropdownSelect from '../DropdownSelect';
-import {
-  Settings as SettingsType,
-  VideoQualityPreset,
-  DisplayCaptureMethod,
-} from '../../Models/types';
+import { Settings as SettingsType, VideoQualityPreset } from '../../Models/types';
 import { sendMessageToBackend } from '../../Utils/MessageUtils';
+import { clampInt } from '../../Utils/NumberUtils';
 import { useAppState } from '../../Context/AppStateContext';
 
 interface VideoSettingsSectionProps {
@@ -75,24 +72,9 @@ export default function VideoSettingsSection({
           })
         }
       />
-    </div>
-  );
-
-  const captureMethodField = (
-    <div className="form-control">
-      <label className="label">
-        <span className="label-text text-base-content">Capture Method</span>
-      </label>
-      <DropdownSelect
-        items={[
-          { value: 'Auto', label: 'Auto' },
-          { value: 'DXGI', label: 'DXGI (Desktop Duplication)' },
-          { value: 'WGC', label: 'WGC (Windows Graphics Capture)' },
-        ]}
-        value={settings.displayCaptureMethod}
-        onChange={(val) => updateSettings({ displayCaptureMethod: val as DisplayCaptureMethod })}
-        disabled={isRecording}
-      />
+      <div className="mt-1 px-1 text-xs text-base-content/60 leading-snug">
+        Used for manual recordings. Game recordings follow the monitor the game is on.
+      </div>
     </div>
   );
 
@@ -190,8 +172,8 @@ export default function VideoSettingsSection({
                   value={localReplayBufferDuration}
                   onChange={(e) => setLocalReplayBufferDuration(e.target.value)}
                   onBlur={() => {
-                    const val = Number(localReplayBufferDuration) || 30;
-                    if (!localReplayBufferDuration) setLocalReplayBufferDuration('30');
+                    const val = clampInt(localReplayBufferDuration, 5, 600, 30);
+                    setLocalReplayBufferDuration(String(val));
                     updateSettings({ replayBufferDuration: val });
                   }}
                   min="5"
@@ -216,8 +198,8 @@ export default function VideoSettingsSection({
                   value={localReplayBufferMaxSize}
                   onChange={(e) => setLocalReplayBufferMaxSize(e.target.value)}
                   onBlur={() => {
-                    const val = Number(localReplayBufferMaxSize) || 1000;
-                    if (!localReplayBufferMaxSize) setLocalReplayBufferMaxSize('1000');
+                    const val = clampInt(localReplayBufferMaxSize, 100, 5000, 1000);
+                    setLocalReplayBufferMaxSize(String(val));
                     updateSettings({ replayBufferMaxSize: val });
                   }}
                   min="100"
@@ -392,8 +374,8 @@ export default function VideoSettingsSection({
                     value={localCrfValue}
                     onChange={(e) => setLocalCrfValue(e.target.value)}
                     onBlur={() => {
-                      const val = Number(localCrfValue) || 23;
-                      if (!localCrfValue) setLocalCrfValue('23');
+                      const val = clampInt(localCrfValue, 0, 51, 23);
+                      setLocalCrfValue(String(val));
                       updateSettings({ crfValue: val });
                     }}
                     min="0"
@@ -416,8 +398,8 @@ export default function VideoSettingsSection({
                     value={localCqLevel}
                     onChange={(e) => setLocalCqLevel(e.target.value)}
                     onBlur={() => {
-                      const val = Number(localCqLevel) || 20;
-                      if (!localCqLevel) setLocalCqLevel('20');
+                      const val = clampInt(localCqLevel, 0, 30, 20);
+                      setLocalCqLevel(String(val));
                       updateSettings({ cqLevel: val });
                     }}
                     min="0"
@@ -484,17 +466,13 @@ export default function VideoSettingsSection({
               </div>
 
               {monitorSelectionField}
-              {captureMethodField}
             </div>
           </motion.div>
         )}
       </AnimatePresence>
 
       {settings.videoQualityPreset !== 'custom' && (
-        <div className="grid grid-cols-2 gap-4 mt-3">
-          {monitorSelectionField}
-          {captureMethodField}
-        </div>
+        <div className="grid grid-cols-2 gap-4 mt-3">{monitorSelectionField}</div>
       )}
 
       {/* 4:3 Stretch Option */}

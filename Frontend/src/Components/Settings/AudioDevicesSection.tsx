@@ -30,10 +30,10 @@ export default function AudioDevicesSection({
     return devices.some((device) => device.id === deviceId);
   };
 
-  // Multi-track audio: first 5 selected sources get isolated tracks (Track 1 is Full Mix)
-  // In GameOnly/GameAndDiscord modes, output devices serve as fallback audio until a game hooks,
-  // at which point they are muted and replaced by Game Audio (+a single shared Voice Chat track
-  // covering Discord/TeamSpeak).
+  // Multi-track audio: Track 1 is the Full Mix, the rest are isolated per source.
+  // The ceiling comes from the loaded OBS build (6 in stock OBS, higher in patched bundles).
+  // In GameOnly/GameAndDiscord modes, game recordings use Game Audio (+ one shared Voice Chat
+  // track) instead of the output devices, which then only apply to manual recordings.
   const selectedInputIds = settings.inputDevices.map((d) => d.id);
   const implicitOutputCount =
     settings.audioOutputMode === 'GameAndDiscord'
@@ -44,7 +44,7 @@ export default function AudioDevicesSection({
   const selectedOutputIds = settings.outputDevices.map((d) => d.id);
   const combinedSelectedIds = [...selectedInputIds, ...selectedOutputIds];
   const totalSourceCount = combinedSelectedIds.length + implicitOutputCount;
-  const maxIsolatedTracks = 5;
+  const maxIsolatedTracks = Math.max(1, appState.maxAudioTracks - 1);
   const hasOverTrackLimit =
     settings.enableSeparateAudioTracks && totalSourceCount > maxIsolatedTracks;
   const selectionSig = combinedSelectedIds.join(',');
@@ -381,28 +381,36 @@ export default function AudioDevicesSection({
                   className="overflow-hidden"
                 >
                   <div className="mt-2 px-1 text-xs text-base-content/60 leading-snug">
-                    Used as fallback audio when no game is hooked.
+                    Only used for manual recordings.
                   </div>
                 </motion.div>
               )}
             </AnimatePresence>
           </div>
 
-          <div className="flex flex-col gap-1 w-80 mt-2">
+          <label className="label mt-3">
+            <span className="label-text text-base-content">What to record</span>
+          </label>
+          <div className="flex flex-col gap-1">
             {[
               {
                 value: 'All' as AudioOutputMode,
-                label: 'All PC Audio',
+                label: 'Everything',
+                description:
+                  'All sound from the selected output devices, including music and voice chat.',
                 icons: <Volume2 className="h-4 w-4" />,
               },
               {
                 value: 'GameOnly' as AudioOutputMode,
-                label: 'Game Audio Only',
+                label: 'Game only',
+                description: "Only the game's own sound. Music and voice chat are left out.",
                 icons: <Gamepad2 className="h-4 w-4" />,
               },
               {
                 value: 'GameAndDiscord' as AudioOutputMode,
-                label: 'Game + Voice Chat Audio Only',
+                label: 'Game and voice chat',
+                description:
+                  'The game plus Discord and TeamSpeak. Music and other apps are left out.',
                 icons: (
                   <span className="flex items-center gap-1.5">
                     <Gamepad2 className="h-4 w-4" />
@@ -414,19 +422,24 @@ export default function AudioDevicesSection({
             ].map((option) => (
               <label
                 key={option.value}
-                className={`flex items-center gap-2 p-1 rounded ${isRecording ? 'cursor-not-allowed opacity-60' : 'cursor-pointer'}`}
+                className={`flex items-start gap-2 p-1 rounded ${isRecording ? 'cursor-not-allowed opacity-60' : 'cursor-pointer hover:bg-base-200'}`}
               >
                 <input
                   type="radio"
                   name="audioOutputMode"
-                  className="radio radio-sm radio-accent"
+                  className="radio radio-sm radio-accent mt-0.5"
                   checked={settings.audioOutputMode === option.value}
                   onChange={() => updateSettings({ audioOutputMode: option.value })}
                   disabled={isRecording}
                 />
-                <span className="flex items-center gap-1.5 text-sm">
-                  {option.label}
-                  {option.icons}
+                <span className="flex flex-col gap-0.5 min-w-0">
+                  <span className="flex items-center gap-1.5 text-sm">
+                    {option.label}
+                    {option.icons}
+                  </span>
+                  <span className="text-xs text-base-content/60 leading-snug">
+                    {option.description}
+                  </span>
                 </span>
               </label>
             ))}
@@ -452,8 +465,9 @@ export default function AudioDevicesSection({
             <div className="py-2 flex items-center w-full">
               <TriangleAlert className="h-5 w-5 mr-2 shrink-0" />
               <motion.span className="min-w-0 flex-1">
-                You have selected more than 5 audio sources. Only the first 5 will be saved as
-                separate audio tracks. Any additional sources will be recorded in the Full Mix only.
+                You have selected more than {maxIsolatedTracks} audio sources. Only the first{' '}
+                {maxIsolatedTracks} will be saved as separate audio tracks. Any additional sources
+                will be recorded in the Full Mix only.
               </motion.span>
               <Button
                 variant="ghost"

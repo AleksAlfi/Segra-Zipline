@@ -31,6 +31,7 @@ export default function UploadModal({ video, onUpload, onClose }: UploadModalPro
   }, [video.fileName]);
 
   const handleUpload = () => {
+    if (!isAuthenticated) return;
     if (!title.trim()) {
       setTitleError(true);
       titleInputRef.current?.focus();

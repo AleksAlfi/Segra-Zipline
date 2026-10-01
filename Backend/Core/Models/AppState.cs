@@ -25,9 +25,11 @@ namespace Segra.Backend.Core.Models
         private List<OBSVersion> _availableOBSVersions = [];
         private bool _isCheckingForUpdates = false;
         private int _maxDisplayHeight = 1080;
+        private int _maxAudioTracks = 6;
         private double _currentFolderSizeGb = 0;
         private double? _recordingDriveUsedGb = null;
         private double? _recordingDriveFreeGb = null;
+        private HotkeyBrokerStatus? _hotkeyBroker;
 
         private IPlatformWatcher? _deviceWatcher;
         private IPlatformWatcher? _displayWatcher;
@@ -173,6 +175,20 @@ namespace Segra.Backend.Core.Models
             }
         }
 
+        [JsonPropertyName("maxAudioTracks")]
+        public int MaxAudioTracks
+        {
+            get => _maxAudioTracks;
+            set
+            {
+                if (_maxAudioTracks != value)
+                {
+                    _maxAudioTracks = value;
+                    SendToFrontend("State update: MaxAudioTracks");
+                }
+            }
+        }
+
         [JsonPropertyName("codecs")]
         public List<Codec> Codecs
         {
@@ -211,6 +227,21 @@ namespace Segra.Backend.Core.Models
                 {
                     _isCheckingForUpdates = value;
                     SendToFrontend("State update: IsCheckingForUpdates");
+                }
+            }
+        }
+
+        // Null where the elevated-hotkey helper does not exist (Linux); the frontend hides the row.
+        [JsonPropertyName("hotkeyBroker")]
+        public HotkeyBrokerStatus? HotkeyBroker
+        {
+            get => _hotkeyBroker;
+            set
+            {
+                if (_hotkeyBroker != value)
+                {
+                    _hotkeyBroker = value;
+                    SendToFrontend("State update: HotkeyBroker");
                 }
             }
         }
@@ -358,7 +389,11 @@ namespace Segra.Backend.Core.Models
         {
             _audioDeviceDebounceTimer?.Dispose();
             _audioDeviceDebounceTimer = new System.Threading.Timer(
-                _ => UpdateAudioDevices(),
+                _ =>
+                {
+                    try { UpdateAudioDevices(); }
+                    catch (Exception ex) { Log.Error(ex, "Failed to update audio devices"); }
+                },
                 null,
                 DebounceDelayMs,
                 Timeout.Infinite
@@ -369,7 +404,11 @@ namespace Segra.Backend.Core.Models
         {
             _displayDebounceTimer?.Dispose();
             _displayDebounceTimer = new System.Threading.Timer(
-                _ => UpdateDisplays(),
+                _ =>
+                {
+                    try { UpdateDisplays(); }
+                    catch (Exception ex) { Log.Error(ex, "Failed to update displays"); }
+                },
                 null,
                 DebounceDelayMs,
                 Timeout.Infinite
