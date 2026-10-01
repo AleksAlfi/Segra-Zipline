@@ -143,6 +143,7 @@ if [[ $selected -eq 0 ]]; then
             --packVersion "$VERSION" \
             --packDir publish \
             --mainExe Segra.exe \
+            --framework webview2,vcredist143-x64 \
             --outputDir releases-out
     fi
 
