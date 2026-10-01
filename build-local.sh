@@ -127,6 +127,10 @@ rm -rf publish
 
 if [[ $selected -eq 0 ]]; then
     # -------- Windows --------
+    # Segra.csproj defines LOCAL_BUILD (auto-updates off) unless GITHUB_ACTIONS=true. The fork's
+    # Windows releases are packed here rather than in CI, so installer builds opt back in.
+    if $INSTALLER; then export GITHUB_ACTIONS=true; fi
+
     dotnet publish Segra.csproj -c Release --self-contained \
         -r win-x64 -f net10.0-windows10.0.19041.0 -o publish \
         ${EXTRA_PROPS[@]+"${EXTRA_PROPS[@]}"}
