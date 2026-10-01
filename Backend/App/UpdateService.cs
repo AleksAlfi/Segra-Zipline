@@ -20,6 +20,12 @@ namespace Segra.Backend.App
         public static GithubSource BetaSource = new("https://github.com/AleksAlfi/Segra-Zipline", null, true);
         public static UpdateManager UpdateManager { get; private set; } = new(Source);
 
+#if LOCAL_BUILD
+        private static readonly bool IsLocalBuild = true;
+#else
+        private static readonly bool IsLocalBuild = false;
+#endif
+
         // Falls back to the assembly version when Velopack has no metadata (dev builds, Flatpak).
         public static NuGet.Versioning.SemanticVersion GetCurrentVersion()
         {
@@ -90,6 +96,12 @@ namespace Segra.Backend.App
 
         public static async Task<bool> UpdateAppIfNecessary(bool forceCheck = false)
         {
+            if (IsLocalBuild)
+            {
+                Log.Information("Skipping update check: local build");
+                return false;
+            }
+
             if (!forceCheck && DateTime.UtcNow - _lastUpdateCheckUtc < UpdateCheckCacheTtl)
             {
                 Log.Information($"Skipping update check: cached result from {_lastUpdateCheckUtc:O} is still valid (TTL {UpdateCheckCacheTtl.TotalHours}h)");
@@ -109,15 +121,17 @@ namespace Segra.Backend.App
 
                 Core.Models.AppState.Instance.IsCheckingForUpdates = true;
 
+                // Downgrades are allowed so users on a deleted release move back to the latest published one
+                var updateOptions = new UpdateOptions { AllowVersionDowngrade = true };
                 bool useBetaChannel = Core.Models.Settings.Instance.ReceiveBetaUpdates;
                 if (useBetaChannel)
                 {
-                    UpdateManager = new UpdateManager(BetaSource);
+                    UpdateManager = new UpdateManager(BetaSource, updateOptions);
                     Log.Information("Using beta update channel");
                 }
                 else
                 {
-                    UpdateManager = new UpdateManager(Source);
+                    UpdateManager = new UpdateManager(Source, updateOptions);
                     Log.Information("Using stable update channel");
                 }
 
@@ -133,6 +147,13 @@ namespace Segra.Backend.App
                 _lastUpdateCheckUtc = DateTime.UtcNow;
 
                 Core.Models.AppState.Instance.IsCheckingForUpdates = false;
+
+                // A stable-channel user on a beta is ahead of stable by choice, not on a deleted release
+                if (newVersion?.IsDowngrade == true && !useBetaChannel && UpdateManager.CurrentVersion?.IsPrerelease == true)
+                    newVersion = null;
+
+                if (newVersion?.IsDowngrade == true)
+                    Log.Information($"Version {UpdateManager.CurrentVersion} is no longer published, moving to {newVersion.TargetFullRelease.Version}");
 
                 if (newVersion == null)
                 {
@@ -242,7 +263,7 @@ namespace Segra.Backend.App
 
             // Stop the broker before the swap; it outlives this process and pins the install directory.
 #if WINDOWS
-            var brokerShutdown = Task.Run(() => KeybindCaptureService.ShutdownBroker(TimeSpan.FromSeconds(20)));
+            var brokerShutdown = Task.Run(() => HotkeyCaptureService.ShutdownBroker(TimeSpan.FromSeconds(20)));
 #endif
 
             // Shutdown OBS before restarting to unload graphics-hook64.dll from game processes.
@@ -347,7 +368,7 @@ namespace Segra.Backend.App
                 LatestUpdateInfo = updateInfo;
 
 #if WINDOWS
-                KeybindCaptureService.ShutdownBroker(TimeSpan.FromSeconds(20));
+                HotkeyCaptureService.ShutdownBroker(TimeSpan.FromSeconds(20));
 #endif
 
                 Log.Information($"Applying force reinstall of {targetVersion}");

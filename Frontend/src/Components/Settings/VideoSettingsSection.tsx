@@ -5,6 +5,10 @@ import { Settings as SettingsType, VideoQualityPreset } from '../../Models/types
 import { sendMessageToBackend } from '../../Utils/MessageUtils';
 import { clampInt } from '../../Utils/NumberUtils';
 import { useAppState } from '../../Context/AppStateContext';
+import {
+  usePendingRecordingSettings,
+  RECORDING_SETTING_GROUPS,
+} from '../../Hooks/usePendingRecordingSettings';
 
 interface VideoSettingsSectionProps {
   settings: SettingsType;
@@ -16,6 +20,7 @@ export default function VideoSettingsSection({
   updateSettings,
 }: VideoSettingsSectionProps) {
   const appState = useAppState();
+  const hasHdrDisplay = appState.displays.some((d) => d.isHdr);
   const [localReplayBufferDuration, setLocalReplayBufferDuration] = useState<string>(
     String(settings.replayBufferDuration),
   );
@@ -40,7 +45,7 @@ export default function VideoSettingsSection({
   useEffect(() => {
     setLocalCqLevel(String(settings.cqLevel));
   }, [settings.cqLevel]);
-  const isRecording = appState.recording != null || appState.preRecording != null;
+  const hasPendingChanges = usePendingRecordingSettings(RECORDING_SETTING_GROUPS.video);
 
   const handlePresetChange = (preset: VideoQualityPreset) => {
     sendMessageToBackend('ApplyVideoPreset', { preset });
@@ -72,17 +77,19 @@ export default function VideoSettingsSection({
           })
         }
       />
-      <div className="mt-1 px-1 text-xs text-base-content/60 leading-snug">
-        Used for manual recordings. Game recordings follow the monitor the game is on.
+      <div className="mt-1 px-1 text-xs opacity-70 leading-snug">
+        Used for manual recordings and the always-on replay buffer.
       </div>
     </div>
   );
 
   return (
-    <div className="p-4 bg-base-300 rounded-lg shadow-md border border-custom">
+    <div className="p-4 bg-base-300 rounded-lg shadow-md border border-base-400">
       <div className="flex items-center gap-2 mb-4">
         <h2 className="text-xl font-semibold">Video Settings</h2>
-        {isRecording && <span className="text-xs text-warning">(locked while recording)</span>}
+        {hasPendingChanges && (
+          <span className="text-xs text-warning">(applies to next recording)</span>
+        )}
       </div>
 
       {/* Quality Preset Selector */}
@@ -91,47 +98,49 @@ export default function VideoSettingsSection({
           <div
             className={`bg-base-200 p-3 rounded-lg flex flex-col items-center justify-center transition-all transition-200 border ${
               settings.videoQualityPreset === 'low' ? 'border-primary' : 'border-base-400'
-            } ${isRecording ? 'opacity-60 cursor-not-allowed' : 'cursor-pointer hover:bg-base-300'}`}
-            onClick={() => !isRecording && handlePresetChange('low')}
+            } cursor-pointer hover:bg-base-300`}
+            onClick={() => handlePresetChange('low')}
           >
             <div className="text-sm font-semibold">Low Quality</div>
-            <div className="text-xs text-base-content text-opacity-70 mt-1">720p • 30fps</div>
+            <div className="text-xs opacity-70 mt-1">720p • 30fps</div>
           </div>
           <div
             className={`bg-base-200 p-3 rounded-lg flex flex-col items-center justify-center transition-all transition-200 border ${
               settings.videoQualityPreset === 'standard' ? 'border-primary' : 'border-base-400'
-            } ${isRecording ? 'opacity-60 cursor-not-allowed' : 'cursor-pointer hover:bg-base-300'}`}
-            onClick={() => !isRecording && handlePresetChange('standard')}
+            } cursor-pointer hover:bg-base-300`}
+            onClick={() => handlePresetChange('standard')}
           >
             <div className="text-sm font-semibold">Standard</div>
-            <div className="text-xs text-base-content text-opacity-70 mt-1">1080p • 60fps</div>
+            <div className="text-xs opacity-70 mt-1">1080p • 60fps</div>
           </div>
           <div
             className={`bg-base-200 p-3 rounded-lg flex flex-col items-center justify-center transition-all transition-200 border ${
               settings.videoQualityPreset === 'high' ? 'border-primary' : 'border-base-400'
-            } ${isRecording ? 'opacity-60 cursor-not-allowed' : 'cursor-pointer hover:bg-base-300'}`}
-            onClick={() => !isRecording && handlePresetChange('high')}
+            } cursor-pointer hover:bg-base-300`}
+            onClick={() => handlePresetChange('high')}
           >
             <div className="text-sm font-semibold">High Quality</div>
-            <div className="text-xs text-base-content text-opacity-70 mt-1">
+            <div className="text-xs opacity-70 mt-1">
               {appState.maxDisplayHeight >= 1440 ? '1440p' : '1080p'} • 60fps
             </div>
           </div>
           <div
             className={`bg-base-200 p-3 rounded-lg flex flex-col items-center justify-center transition-all transition-200 border ${
               settings.videoQualityPreset === 'custom' ? 'border-primary' : 'border-base-400'
-            } ${isRecording ? 'opacity-60 cursor-not-allowed' : 'cursor-pointer hover:bg-base-300'}`}
-            onClick={() => !isRecording && handlePresetChange('custom')}
+            } cursor-pointer hover:bg-base-300`}
+            onClick={() => handlePresetChange('custom')}
           >
             <div className="text-sm font-semibold">Custom</div>
-            <div className="text-xs text-base-content text-opacity-70 mt-1">Manual config</div>
+            <div className="text-xs opacity-70 mt-1">Manual config</div>
           </div>
         </div>
       </div>
 
-      {/* Replay Buffer Settings - Only show when Replay Buffer mode is selected */}
-      <AnimatePresence>
-        {(settings.recordingMode === 'Buffer' || settings.recordingMode === 'Hybrid') && (
+      {/* Replay Buffer Settings - Only show when a replay buffer is in use */}
+      <AnimatePresence initial={false}>
+        {(settings.recordingMode === 'Buffer' ||
+          settings.recordingMode === 'Hybrid' ||
+          settings.alwaysOnReplayBuffer) && (
           <motion.div
             className="bg-base-300"
             initial={{ opacity: 0, height: 0 }}
@@ -161,52 +170,60 @@ export default function VideoSettingsSection({
               <div className="form-control w-full">
                 <label
                   htmlFor="replayBufferDuration"
-                  className="label text-base-content px-0 !block mb-1"
+                  className="label text-base-content px-0 !block"
                 >
-                  <span className="label-text">Buffer Duration (seconds)</span>
+                  <span className="label-text">Buffer Duration</span>
                 </label>
-                <input
-                  id="replayBufferDuration"
-                  type="number"
-                  name="replayBufferDuration"
-                  value={localReplayBufferDuration}
-                  onChange={(e) => setLocalReplayBufferDuration(e.target.value)}
-                  onBlur={() => {
-                    const val = clampInt(localReplayBufferDuration, 5, 600, 30);
-                    setLocalReplayBufferDuration(String(val));
-                    updateSettings({ replayBufferDuration: val });
-                  }}
-                  min="5"
-                  max="600"
-                  disabled={isRecording}
-                  className={`input input-bordered bg-base-200 disabled:bg-base-200 disabled:input-bordered disabled:opacity-80 w-full outline-none focus:border-base-400`}
-                />
+                <div className="relative w-full">
+                  <input
+                    id="replayBufferDuration"
+                    type="number"
+                    name="replayBufferDuration"
+                    value={localReplayBufferDuration}
+                    onChange={(e) => setLocalReplayBufferDuration(e.target.value)}
+                    onBlur={() => {
+                      const val = clampInt(localReplayBufferDuration, 5, 600, 30);
+                      setLocalReplayBufferDuration(String(val));
+                      updateSettings({ replayBufferDuration: val });
+                    }}
+                    min="5"
+                    max="600"
+                    className="input input-bordered bg-base-200 disabled:bg-base-200 disabled:input-bordered disabled:opacity-80 w-full pr-12 outline-none focus:border-base-400"
+                  />
+                  <span className="absolute inset-y-0 right-3 flex items-center text-sm opacity-60 pointer-events-none">
+                    sec
+                  </span>
+                </div>
               </div>
 
               {/* Buffer Max Size */}
               <div className="form-control w-full">
                 <label
                   htmlFor="replayBufferMaxSize"
-                  className="label text-base-content px-0 !block mb-1"
+                  className="label text-base-content px-0 !block"
                 >
-                  <span className="label-text">Buffer Maximum Size (MB)</span>
+                  <span className="label-text">Buffer Maximum Size</span>
                 </label>
-                <input
-                  id="replayBufferMaxSize"
-                  type="number"
-                  name="replayBufferMaxSize"
-                  value={localReplayBufferMaxSize}
-                  onChange={(e) => setLocalReplayBufferMaxSize(e.target.value)}
-                  onBlur={() => {
-                    const val = clampInt(localReplayBufferMaxSize, 100, 5000, 1000);
-                    setLocalReplayBufferMaxSize(String(val));
-                    updateSettings({ replayBufferMaxSize: val });
-                  }}
-                  min="100"
-                  max="5000"
-                  disabled={isRecording}
-                  className="input input-bordered bg-base-200 disabled:bg-base-200 disabled:input-bordered disabled:opacity-80 w-full outline-none focus:border-base-400"
-                />
+                <div className="relative w-full">
+                  <input
+                    id="replayBufferMaxSize"
+                    type="number"
+                    name="replayBufferMaxSize"
+                    value={localReplayBufferMaxSize}
+                    onChange={(e) => setLocalReplayBufferMaxSize(e.target.value)}
+                    onBlur={() => {
+                      const val = clampInt(localReplayBufferMaxSize, 100, 5000, 1000);
+                      setLocalReplayBufferMaxSize(String(val));
+                      updateSettings({ replayBufferMaxSize: val });
+                    }}
+                    min="100"
+                    max="5000"
+                    className="input input-bordered bg-base-200 disabled:bg-base-200 disabled:input-bordered disabled:opacity-80 w-full pr-12 outline-none focus:border-base-400"
+                  />
+                  <span className="absolute inset-y-0 right-3 flex items-center text-sm opacity-60 pointer-events-none">
+                    MB
+                  </span>
+                </div>
               </div>
             </motion.div>
           </motion.div>
@@ -214,7 +231,7 @@ export default function VideoSettingsSection({
       </AnimatePresence>
 
       {/* Advanced Settings - Only show when Custom preset is selected */}
-      <AnimatePresence>
+      <AnimatePresence initial={false}>
         {settings.videoQualityPreset === 'custom' && (
           <motion.div
             initial={{ opacity: 0, height: 0 }}
@@ -254,23 +271,21 @@ export default function VideoSettingsSection({
                   onChange={(val) =>
                     updateSettings({ resolution: val as '720p' | '1080p' | '1440p' | '4K' })
                   }
-                  disabled={isRecording}
                 />
               </div>
 
               {/* Frame Rate */}
               <div className="form-control">
                 <label className="label">
-                  <span className="label-text text-base-content">Frame Rate (FPS)</span>
+                  <span className="label-text text-base-content">Frame Rate</span>
                 </label>
                 <DropdownSelect
                   items={[24, 30, 60, 120, 144].map((v) => ({
                     value: String(v),
-                    label: String(v),
+                    label: `${v} FPS`,
                   }))}
                   value={String(settings.frameRate)}
                   onChange={(val) => updateSettings({ frameRate: Number(val) })}
-                  disabled={isRecording}
                 />
               </div>
 
@@ -292,7 +307,6 @@ export default function VideoSettingsSection({
                   ]}
                   value={settings.rateControl}
                   onChange={(val) => updateSettings({ rateControl: val })}
-                  disabled={isRecording}
                 />
               </div>
 
@@ -309,7 +323,6 @@ export default function VideoSettingsSection({
                     }))}
                     value={String(settings.bitrate)}
                     onChange={(val) => updateSettings({ bitrate: Number(val) })}
-                    disabled={isRecording}
                   />
                 </div>
               )}
@@ -332,7 +345,6 @@ export default function VideoSettingsSection({
                         const max = Math.max(min, settings.maxBitrate ?? min);
                         updateSettings({ minBitrate: min, maxBitrate: max });
                       }}
-                      disabled={isRecording}
                     />
                   </div>
                   <div className="form-control">
@@ -356,7 +368,6 @@ export default function VideoSettingsSection({
                         const min = Math.min(max, settings.minBitrate ?? settings.bitrate);
                         updateSettings({ maxBitrate: max, minBitrate: min });
                       }}
-                      disabled={isRecording}
                     />
                   </div>
                 </>
@@ -366,23 +377,27 @@ export default function VideoSettingsSection({
               {settings.rateControl === 'CRF' && (
                 <div className="form-control">
                   <label className="label">
-                    <span className="label-text text-base-content">CRF Value (0-51)</span>
+                    <span className="label-text text-base-content">CRF Value</span>
                   </label>
-                  <input
-                    type="number"
-                    name="crfValue"
-                    value={localCrfValue}
-                    onChange={(e) => setLocalCrfValue(e.target.value)}
-                    onBlur={() => {
-                      const val = clampInt(localCrfValue, 0, 51, 23);
-                      setLocalCrfValue(String(val));
-                      updateSettings({ crfValue: val });
-                    }}
-                    min="0"
-                    max="51"
-                    disabled={isRecording}
-                    className="input input-bordered bg-base-200 disabled:bg-base-200 disabled:opacity-80 w-full outline-none focus:border-base-400"
-                  />
+                  <div className="relative w-full">
+                    <input
+                      type="number"
+                      name="crfValue"
+                      value={localCrfValue}
+                      onChange={(e) => setLocalCrfValue(e.target.value)}
+                      onBlur={() => {
+                        const val = clampInt(localCrfValue, 0, 51, 23);
+                        setLocalCrfValue(String(val));
+                        updateSettings({ crfValue: val });
+                      }}
+                      min="0"
+                      max="51"
+                      className="input input-bordered bg-base-200 disabled:bg-base-200 disabled:opacity-80 w-full pr-14 outline-none focus:border-base-400"
+                    />
+                    <span className="absolute inset-y-0 right-3 flex items-center text-sm opacity-60 pointer-events-none">
+                      0-51
+                    </span>
+                  </div>
                 </div>
               )}
 
@@ -390,23 +405,27 @@ export default function VideoSettingsSection({
               {settings.rateControl === 'CQP' && (
                 <div className="form-control">
                   <label className="label">
-                    <span className="label-text text-base-content">CQ Level (0-30)</span>
+                    <span className="label-text text-base-content">CQ Level</span>
                   </label>
-                  <input
-                    type="number"
-                    name="cqLevel"
-                    value={localCqLevel}
-                    onChange={(e) => setLocalCqLevel(e.target.value)}
-                    onBlur={() => {
-                      const val = clampInt(localCqLevel, 0, 30, 20);
-                      setLocalCqLevel(String(val));
-                      updateSettings({ cqLevel: val });
-                    }}
-                    min="0"
-                    max="30"
-                    disabled={isRecording}
-                    className="input input-bordered bg-base-200 disabled:bg-base-200 disabled:opacity-80 w-full outline-none focus:border-base-400"
-                  />
+                  <div className="relative w-full">
+                    <input
+                      type="number"
+                      name="cqLevel"
+                      value={localCqLevel}
+                      onChange={(e) => setLocalCqLevel(e.target.value)}
+                      onBlur={() => {
+                        const val = clampInt(localCqLevel, 0, 30, 20);
+                        setLocalCqLevel(String(val));
+                        updateSettings({ cqLevel: val });
+                      }}
+                      min="0"
+                      max="30"
+                      className="input input-bordered bg-base-200 disabled:bg-base-200 disabled:opacity-80 w-full pr-14 outline-none focus:border-base-400"
+                    />
+                    <span className="absolute inset-y-0 right-3 flex items-center text-sm opacity-60 pointer-events-none">
+                      0-30
+                    </span>
+                  </div>
                 </div>
               )}
 
@@ -422,7 +441,6 @@ export default function VideoSettingsSection({
                   ]}
                   value={settings.encoder}
                   onChange={(val) => updateSettings({ encoder: val as 'gpu' | 'cpu' })}
-                  disabled={isRecording}
                 />
               </div>
 
@@ -461,7 +479,7 @@ export default function VideoSettingsSection({
                       codec: appState.codecs.find((c) => c.internalEncoderId === val),
                     })
                   }
-                  disabled={isRecording || appState.codecs.length === 0}
+                  disabled={appState.codecs.length === 0}
                 />
               </div>
 
@@ -475,39 +493,40 @@ export default function VideoSettingsSection({
         <div className="grid grid-cols-2 gap-4 mt-3">{monitorSelectionField}</div>
       )}
 
-      {/* 4:3 Stretch Option */}
-      <div className="mt-3">
-        <label
-          className={`flex items-center gap-2 ${isRecording ? 'cursor-not-allowed opacity-60' : 'cursor-pointer'}`}
-        >
+      <div className="flex flex-col gap-3 mt-3">
+        <label className="flex items-center gap-3 cursor-pointer p-3 bg-base-200 rounded-lg border border-base-400">
           <input
             type="checkbox"
             checked={settings.stretch4By3}
             onChange={(e) => updateSettings({ stretch4By3: e.target.checked })}
-            disabled={isRecording}
             className="checkbox checkbox-primary checkbox-sm"
           />
-          <span>Stretch 4:3 content to 16:9</span>
+          <div>
+            <div className="font-semibold">Stretch 4:3 to 16:9</div>
+            <div className="text-sm opacity-70 mt-0.5">
+              Games running at a 4:3 resolution fill the whole video instead of getting black bars.
+            </div>
+          </div>
         </label>
-      </div>
 
-      {/* HDR Option - only shown when at least one display is in HDR mode */}
-      {appState.displays.some((d) => d.isHdr) && (
-        <div className="mt-3">
-          <label
-            className={`flex items-center gap-2 ${isRecording ? 'cursor-not-allowed opacity-60' : 'cursor-pointer'}`}
-          >
+        {/* Only shown when at least one display is in HDR mode */}
+        {hasHdrDisplay && (
+          <label className="flex items-center gap-3 cursor-pointer p-3 bg-base-200 rounded-lg border border-base-400">
             <input
               type="checkbox"
               checked={settings.enableHdr}
               onChange={(e) => updateSettings({ enableHdr: e.target.checked })}
-              disabled={isRecording}
               className="checkbox checkbox-primary checkbox-sm"
             />
-            <span>Record in HDR</span>
+            <div>
+              <div className="font-semibold">Record in HDR</div>
+              <div className="text-sm opacity-70 mt-0.5">
+                Keeps HDR brightness and color. Videos can look washed out on screens without HDR.
+              </div>
+            </div>
           </label>
-        </div>
-      )}
+        )}
+      </div>
     </div>
   );
 }

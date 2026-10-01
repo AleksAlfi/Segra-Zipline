@@ -11,15 +11,15 @@ import {
   FolderOpen,
   PenLine,
   Trash2,
-  Link,
-  Check,
   Ellipsis,
   Minimize2,
   Crown,
-  ExternalLink,
   Copy,
   Bookmark,
+  ExternalLink,
 } from 'lucide-react';
+import { Link, Check } from 'lucide';
+import { MorphIcon } from 'morphicons/react';
 import { useAiHighlights } from '../Context/AiHighlightsContext';
 import { useCompression } from '../Context/CompressionContext';
 import Button from './Button';
@@ -34,10 +34,6 @@ let hasSeededKnownContent = false;
 
 // Thumbnails already loaded this session, so a remounted card shows instantly without re-animating.
 const loadedThumbnailKeys = new Set<string>();
-
-// Uploads now store the full Zipline share URL; legacy entries only stored a Segra video id.
-const getShareUrl = (uploadId: string) =>
-  uploadId.startsWith('http') ? uploadId : `https://segra.tv/video/${uploadId}`;
 
 // Shared observer that collapses far off-screen cards to fixed-size placeholders.
 const offscreenCallbacks = new Map<Element, (entry: IntersectionObserverEntry) => void>();
@@ -84,7 +80,6 @@ export default function ContentCard({
   const dropdownTriggerRef = useRef<HTMLLabelElement>(null);
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
   const [copied, setCopied] = useState(false);
-  const [opened, setOpened] = useState(false);
   const [isRenaming, setIsRenaming] = useState(false);
   const [renameValue, setRenameValue] = useState('');
   const [contextMenuPosition, setContextMenuPosition] = useState<{
@@ -418,6 +413,8 @@ export default function ContentCard({
     });
   };
 
+  const uploadUrl = content?.uploadUrl;
+
   const hasHighlightBookmarks = content?.bookmarks?.some((bookmark) =>
     includeInHighlight(bookmark.type),
   );
@@ -693,49 +690,29 @@ export default function ContentCard({
           <span>
             {content!.fileSize} &bull; {new Date(content!.createdAt).toLocaleDateString()}
           </span>
-          {!airplaneMode && content!.uploadId && (
-            <div className="flex absolute right-3 gap-0 pr-1">
+          {!airplaneMode && uploadUrl && (
+            <div className="flex absolute right-3 gap-0 pr-[0.3875rem]">
               <span
-                className="btn btn-ghost btn-sm btn-circle relative group hover:bg-white/10 active:bg-white/10"
+                className="btn btn-ghost btn-sm btn-circle size-8.5 relative group hover:bg-white/10 active:bg-white/10"
                 onClick={(e) => {
                   e.stopPropagation();
-                  navigator.clipboard.writeText(getShareUrl(content!.uploadId!));
+                  navigator.clipboard.writeText(uploadUrl);
                   setCopied(true);
                   setTimeout(() => setCopied(false), 1500);
                 }}
               >
-                <label
-                  className={`swap overflow-hidden justify-center ${copied ? 'swap-active' : ''}`}
-                >
-                  <div className="swap-off">
-                    <Link size={20} />
-                  </div>
-                  <div className="swap-on">
-                    <Check size={20} />
-                  </div>
-                </label>
+                <MorphIcon icon={copied ? Check : Link} size={18} spring="snappy" />
               </span>
               <span
-                className="btn btn-ghost btn-sm btn-circle hover:bg-white/10 active:bg-white/10"
+                className="btn btn-ghost btn-sm btn-circle size-8.5 -ml-1 hover:bg-white/10 active:bg-white/10"
                 onClick={(e) => {
                   e.stopPropagation();
                   sendMessageToBackend('OpenInBrowser', {
-                    Url: getShareUrl(content!.uploadId!),
+                    Url: uploadUrl,
                   });
-                  setOpened(true);
-                  setTimeout(() => setOpened(false), 1500);
                 }}
               >
-                <label
-                  className={`swap overflow-hidden justify-center ${opened ? 'swap-active' : ''}`}
-                >
-                  <div className="swap-off">
-                    <ExternalLink size={20} />
-                  </div>
-                  <div className="swap-on">
-                    <Check size={20} />
-                  </div>
-                </label>
+                <ExternalLink size={18} />
               </span>
             </div>
           )}

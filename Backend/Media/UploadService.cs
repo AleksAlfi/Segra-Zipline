@@ -163,7 +163,7 @@ namespace Segra.Backend.Media
                 var responseContent = await response.Content.ReadAsStringAsync();
                 Log.Information($"Upload success: {responseContent}");
 
-                // Parse the response to extract the URL and update the content with uploadId
+                // Parse the response to extract the URL and store it on the content
                 if (!string.IsNullOrEmpty(responseContent))
                 {
                     try
@@ -180,32 +180,30 @@ namespace Segra.Backend.Media
                                 if (url.StartsWith('/'))
                                     url = AuthService.ServerUrl + url;
 
-                                // Store the full Zipline share URL; the frontend uses it verbatim
-                                string uploadId = url;
                                 Log.Information($"Zipline share URL: {url}");
 
-                                // Update the content with the uploadId (re-resolved by id in case state was reloaded mid-upload)
+                                // Update the content with the URL (re-resolved by id in case state was reloaded mid-upload)
                                 var contentToUpdate = AppState.Instance.Content.FirstOrDefault(c => c.Id == content.Id);
                                 Log.Information($"Content to update: {contentToUpdate?.FileName ?? "not found"}");
 
                                 if (contentToUpdate != null)
                                 {
-                                    contentToUpdate.UploadId = uploadId;
+                                    contentToUpdate.UploadUrl = url;
 
                                     // Also update the metadata file
                                     string metadataFilePath = FolderNames.GetMetadataFilePath(contentToUpdate.Type, contentToUpdate.Id);
 
                                     var updatedContent = await ContentService.UpdateMetadataFile(metadataFilePath, content =>
                                     {
-                                        content.UploadId = uploadId;
+                                        content.UploadUrl = url;
                                     });
 
                                     if (updatedContent != null)
                                     {
-                                        Log.Information($"Updated metadata file with upload ID: {metadataFilePath}");
+                                        Log.Information($"Updated metadata file with upload URL: {metadataFilePath}");
                                     }
 
-                                    Log.Information($"Updated content with upload ID: {uploadId}");
+                                    Log.Information($"Updated content with upload URL: {url}");
                                     await SettingsService.LoadContentFromFolderIntoState(true);
                                 }
 
