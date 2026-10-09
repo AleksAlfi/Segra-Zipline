@@ -113,6 +113,10 @@ fi
 # ---------------------------------------------------------------------------
 if $INSTALLER; then
   export SEGRA_VERSION="$VERSION"
+  # Stamps the assembly version like upstream's CI does. Program.cs puts it in the frontend URL
+  # (index.html?v=...) as the cache key; without it every build is 1.0.0 and WebView2 keeps
+  # serving the previous release's UI after an update.
+  EXTRA_PROPS+=("-p:Version=$VERSION")
 fi
 echo "=== Building Frontend ==="
 (cd Frontend && npm run build)
