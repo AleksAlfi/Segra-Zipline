@@ -59,6 +59,11 @@ namespace Segra.Backend.Recorder
         private static volatile Recording? _alwaysOnBuffer;
         private static volatile string? _alwaysOnBufferKey;
         private static volatile bool _isExiting;
+#if !WINDOWS
+        // End the wait for the screen-share dialog (see FitCanvasToPortalScreen)
+        private static volatile bool _startCancelled;
+        private static volatile bool _portalFailed;
+#endif
 
         public static bool IsAlwaysOnBufferActive => _alwaysOnBuffer != null;
 
@@ -514,6 +519,12 @@ namespace Segra.Backend.Recorder
                         _isStillHookedAfterUnhook = true;
                     }
 
+#if !WINDOWS
+                    // The screen-share dialog was cancelled or the portal failed (screencast-portal.c)
+                    if (message.Contains("[pipewire] Failed to") || message.Contains("[pipewire] Error") || message.Contains("[portals] Error"))
+                        _portalFailed = true;
+#endif
+
                     // libobs rebuilds a lost D3D11 device when the probe display presents (d3d11-rebuild.cpp).
                     if (message.Contains("Rebuilding all assets"))
                     {
@@ -877,6 +888,11 @@ namespace Segra.Backend.Recorder
             _currentOutputWidth = outputWidth;
             _currentOutputHeight = outputHeight;
 
+            // obs_reset_video drops queued graphics tasks, which is where destroyed display captures release their DXGI duplicator
+            // (https://github.com/obsproject/obs-studio/pull/14004)
+            if (Obs.WaitForDestroyQueue())
+                Obs.QueueTask(ObsTaskType.Graphics, () => { }, wait: true);
+
             // Must be set on every reset: OBSKit reuses its settings object, so a prior HDR
             // recording would otherwise leave the next SDR one in P010/PQ.
             Obs.SetVideo(v =>
@@ -950,6 +966,10 @@ namespace Segra.Backend.Recorder
 
         private static bool StartRecordingCore(string name, string exePath, bool startManually, int? pid, bool alwaysOn = false)
         {
+#if !WINDOWS
+            _startCancelled = false;
+            _portalFailed = false;
+#endif
             if (!IsOBSInstalled())
             {
                 Log.Information("OBS is not installed. Skipping recording.");
@@ -1146,6 +1166,14 @@ namespace Segra.Backend.Recorder
                 AddMonitorCapture();
                 _displayItem?.SetBounds(ObsBoundsType.ScaleInner, _currentBaseWidth, _currentBaseHeight).SetPosition(0, 0);
             }
+
+            if (!FitCanvasToPortalScreen(eff))
+            {
+                DisposeSources();
+                AppState.Instance.PreRecording = null;
+                _isStoppingOrStopped = true;
+                return false;
+            }
 #endif
 
             // Fastest retries the hook every 0.2s instead of 2s. If it hasn't hooked by then it
@@ -1250,6 +1278,15 @@ namespace Segra.Backend.Recorder
                 _videoEncoder = new VideoEncoder(encoderId, "Segra Recorder", videoEncoderSettings);
             }
 
+            // Without a microphone, Linux's default input is a speaker monitor, which would record the desktop audio twice
+            bool skipDefaultInput = false;
+#if !WINDOWS
+            skipDefaultInput = Settings.Instance.InputDevices?.Any(d => d.Id == "default") == true
+                && Platform.Linux.LinuxAudioDeviceService.DefaultSourceIsMonitor();
+            if (skipDefaultInput)
+                Log.Information("No microphone found; skipping the default input device");
+#endif
+
             // Create audio sources and add to scene
             if (Settings.Instance.InputDevices != null && Settings.Instance.InputDevices.Count > 0)
             {
@@ -1257,6 +1294,9 @@ namespace Segra.Backend.Recorder
                 {
                     if (!string.IsNullOrEmpty(deviceSetting.Id))
                     {
+                        if (skipDefaultInput && deviceSetting.Id == "default")
+                            continue;
+
                         string sourceName = $"Microphone_{_micSources.Count + 1}";
                         var micSource = deviceSetting.Id == "default"
                             ? AudioInputCapture.FromDefault(sourceName)
@@ -1375,7 +1415,7 @@ namespace Segra.Backend.Recorder
             var audioDeviceNames = new List<string>();
             if (Settings.Instance.InputDevices != null)
             {
-                foreach (var device in Settings.Instance.InputDevices.Where(d => !string.IsNullOrEmpty(d.Id)))
+                foreach (var device in Settings.Instance.InputDevices.Where(d => !string.IsNullOrEmpty(d.Id) && !(skipDefaultInput && d.Id == "default")))
                 {
                     audioDeviceNames.Add(device.Name.Replace(" (Default)", "") ?? "Microphone");
                 }
@@ -1647,7 +1687,12 @@ namespace Segra.Backend.Recorder
             bool isWayland = !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("WAYLAND_DISPLAY"));
             if (isWayland)
             {
-                _displaySource = MonitorCapture.FromMonitor(monitorIndex, "display");
+                // The portal picks the screen; the last restore token lets it skip its picker (see SavePortalRestoreToken)
+                using var portalSettings = new ObsKit.NET.Core.Settings();
+                portalSettings.Set("ShowCursor", true);
+                if (!string.IsNullOrEmpty(Settings.Instance.PipeWireRestoreToken))
+                    portalSettings.Set("RestoreToken", Settings.Instance.PipeWireRestoreToken);
+                _displaySource = new Source(MonitorCapture.LinuxTypeId, "display", portalSettings);
                 Log.Information($"Display capture added for monitor {monitorIndex} using PipeWire (portal)");
             }
             else
@@ -1666,6 +1711,66 @@ namespace Segra.Backend.Recorder
             // Add to scene (display is behind game capture in layer order)
             _displayItem = _mainScene.AddSource(_displaySource);
         }
+
+#if !WINDOWS
+        // The portal, not xrandr, decides which screen is shared, so size the canvas from the stream.
+        // It has a size once a screen is picked (right away with a restore token), before any output starts.
+        // Returns false when a stop or exit cancelled the start during the wait.
+        private static bool FitCanvasToPortalScreen(EffectiveRecordingSettings eff)
+        {
+            var source = _displaySource;
+            // Without a ScreenCast portal the source type isn't registered and never gets a size
+            if (source?.TypeId != MonitorCapture.LinuxTypeId || source.DisplayName == null) return true;
+
+            var waited = Stopwatch.StartNew();
+            while (source.Width == 0 && waited.Elapsed < TimeSpan.FromSeconds(30) && !_portalFailed && !_startCancelled && !_isExiting)
+                Thread.Sleep(100);
+
+            if (_startCancelled || _isExiting)
+            {
+                Log.Information("Recording cancelled while waiting for the share dialog");
+                return false;
+            }
+
+            uint width = source.Width, height = source.Height;
+            if (width == 0 || height == 0)
+            {
+                Log.Information(_portalFailed
+                    ? "Screen sharing was declined or failed; recording without video"
+                    : $"No screen picked in the share dialog yet; recording at {_currentBaseWidth}x{_currentBaseHeight}");
+                return true;
+            }
+
+            // Saved now so a crash during the recording can't lose the pick
+            SavePortalRestoreToken(source);
+            if (width == _currentBaseWidth && height == _currentBaseHeight) return true;
+
+            ResetVideoSettings(out _, customFps: (uint)eff.FrameRate, customOutputWidth: width, customOutputHeight: height, customResolution: eff.Resolution);
+            _displayItem?.SetBounds(ObsBoundsType.ScaleInner, _currentBaseWidth, _currentBaseHeight).SetPosition(0, 0);
+            Log.Information($"Canvas set to the shared screen's {width}x{height}");
+            return true;
+        }
+
+        // The portal gives the source a restore token once a screen is picked; passing it back next time skips the picker
+        private static void SavePortalRestoreToken(Source source)
+        {
+            try
+            {
+                using var sourceSettings = source.GetSettings();
+                string? token = sourceSettings.GetString("RestoreToken");
+                if (!string.IsNullOrEmpty(token) && token != Settings.Instance.PipeWireRestoreToken)
+                {
+                    Settings.Instance.PipeWireRestoreToken = token;
+                    SettingsService.SaveSettings(suppressLog: true);
+                    _ = MessageService.SendSettingsToFrontend("Screen picked");
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.Warning($"Failed to save the screen-share restore token: {ex.Message}");
+            }
+        }
+#endif
 
         /// <summary>
         /// Switches the live display capture to the selected monitor in place (keeping the source and its
@@ -1891,6 +1996,11 @@ namespace Segra.Backend.Recorder
         // expectedPid: skip the stop if the tracked recording has since moved to a different PID.
         public static async Task StopRecording(int? expectedPid = null)
         {
+#if !WINDOWS
+            // Ends a start that is waiting for the share dialog. Process-exit stops stay queued, since launcher chains hand off pids.
+            if (expectedPid == null && AppState.Instance.PreRecording != null)
+                _startCancelled = true;
+#endif
             // Prevent race conditions when multiple callers try to stop recording simultaneously
             await _stopRecordingSemaphore.WaitAsync();
             try
@@ -3317,6 +3427,10 @@ namespace Segra.Backend.Recorder
 
             if (_displaySource != null)
             {
+#if !WINDOWS
+                // Covers a screen picked after the start stopped waiting for it
+                SavePortalRestoreToken(_displaySource);
+#endif
                 try
                 {
                     Log.Information("Disposing display source");
@@ -3369,12 +3483,8 @@ namespace Segra.Backend.Recorder
             _bufferOutput = null;
         }
 
-        // ?isLinux=true selects the Linux recorder bundles; the default serves the Windows OBS zips.
 #if WINDOWS
         private const string ObsVersionsUrl = "https://segra.tv/api/obs/versions";
-#else
-        private const string ObsVersionsUrl = "https://segra.tv/api/obs/versions?isLinux=true";
-#endif
 
         public static async Task AvailableOBSVersionsAsync()
         {
@@ -3382,11 +3492,18 @@ namespace Segra.Backend.Recorder
             {
                 // SEGRA_OBS_VERSIONS_URL overrides the endpoint (useful for staging / local testing).
                 string url = Environment.GetEnvironmentVariable("SEGRA_OBS_VERSIONS_URL") ?? ObsVersionsUrl;
-                List<Core.Models.OBSVersion>? response = null;
+                List<OBSVersion>? response = null;
                 using (HttpClient client = new())
                 {
                     // Fail fast instead of the default 100s timeout when unreachable.
                     client.Timeout = TimeSpan.FromSeconds(15);
+                    if (!Settings.Instance.AirplaneMode)
+                    {
+                        client.DefaultRequestHeaders.UserAgent.TryParseAdd($"Segra/{UpdateService.GetCurrentVersion()}");
+                        client.DefaultRequestHeaders.UserAgent.TryParseAdd($"(Windows {Environment.OSVersion.Version.ToString(3)})");
+                        client.DefaultRequestHeaders.Add("X-Segra-First-Run", Program.IsFirstRun ? "1" : "0");
+                    }
+
                     try
                     {
                         response = await client.GetFromJsonAsync<List<Core.Models.OBSVersion>>(url);
@@ -3446,6 +3563,7 @@ namespace Segra.Backend.Recorder
                 Log.Error($"Failed to get available OBS versions: {ex.Message}");
             }
         }
+#endif
 
         public static bool IsOBSInstalled()
         {
@@ -3468,130 +3586,6 @@ namespace Segra.Backend.Recorder
         }
 
 #if !WINDOWS
-        // Downloads the Linux recorder bundle from the API, extracts it, and re-execs to apply it.
-        // Expects OBSVersion.Url to be a direct .tar.gz or .zip URL.
-        private static async Task DownloadLinuxObsRuntimeAsync()
-        {
-            if (AppState.Instance.AvailableOBSVersions == null || AppState.Instance.AvailableOBSVersions.Count == 0)
-                await AvailableOBSVersionsAsync();
-
-            var versions = AppState.Instance.AvailableOBSVersions;
-            if (versions == null || versions.Count == 0)
-            {
-                Log.Error("No Linux OBS runtime bundles available from the API.");
-                throw new Exception("linux-obs-unavailable");
-            }
-
-            string? selectedVersion = Settings.Instance.SelectedOBSVersion;
-            var versionToDownload = (!string.IsNullOrEmpty(selectedVersion)
-                    ? versions.FirstOrDefault(v => v.Version == selectedVersion) : null)
-                ?? versions.Where(v => !v.IsBeta).OrderByDescending(v => v.Version).FirstOrDefault()
-                ?? versions.First();
-
-            string url = versionToDownload.Url;
-
-            // The versions API serves a GitHub contents-API URL (JSON metadata, not the file); resolve the
-            // real download_url from it via the same helper the Windows flow uses. A direct .tar.gz/.zip URL
-            // (e.g. the mock/staging server) is used as-is.
-            if (url.Contains("api.github.com", StringComparison.OrdinalIgnoreCase)
-                && url.Contains("/contents/", StringComparison.OrdinalIgnoreCase))
-            {
-                using var metaClient = new HttpClient();
-                url = (await FetchGitHubFileMetadataAsync(metaClient, url, versionToDownload.Version)).DownloadUrl;
-            }
-
-            Log.Information($"Downloading Linux OBS runtime {versionToDownload.Version} from {url}");
-
-            string appDataDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Segra");
-            Directory.CreateDirectory(appDataDir);
-            bool isZip = url.EndsWith(".zip", StringComparison.OrdinalIgnoreCase);
-            string archivePath = Path.Combine(appDataDir, isZip ? "obs-linux-download.zip" : "obs-linux-download.tar.gz");
-
-            using (var httpClient = new HttpClient())
-            {
-                httpClient.Timeout = Timeout.InfiniteTimeSpan;
-                using var resp = await httpClient.GetAsync(url, HttpCompletionOption.ResponseHeadersRead);
-                resp.EnsureSuccessStatusCode();
-                long totalBytes = resp.Content.Headers.ContentLength ?? -1L;
-                using var contentStream = await resp.Content.ReadAsStreamAsync();
-                using var fileStream = new FileStream(archivePath, FileMode.Create, FileAccess.Write, FileShare.None, 8192, true);
-                var buffer = new byte[8192];
-                long totalRead = 0; int bytesRead, lastProgress = -1;
-                while ((bytesRead = await contentStream.ReadAsync(buffer)) > 0)
-                {
-                    await fileStream.WriteAsync(buffer.AsMemory(0, bytesRead));
-                    totalRead += bytesRead;
-                    if (totalBytes > 0)
-                    {
-                        int progress = (int)((totalRead * 100) / totalBytes);
-                        if (progress != lastProgress)
-                        {
-                            lastProgress = progress;
-                            await SendFrontendMessage("ObsDownloadProgress", new { progress, status = "downloading" });
-                        }
-                    }
-                }
-            }
-
-            Log.Information("Download complete; extracting Linux OBS runtime...");
-            string dest = Platform.Linux.LinuxObsRuntime.DownloadedBundleDir();
-            if (Directory.Exists(dest)) Directory.Delete(dest, true);
-            Directory.CreateDirectory(dest);
-
-            if (isZip)
-                ZipFile.ExtractToDirectory(archivePath, dest, overwriteFiles: true);
-            else
-            {
-                using var fs = File.OpenRead(archivePath);
-                using var gz = new System.IO.Compression.GZipStream(fs, System.IO.Compression.CompressionMode.Decompress);
-                System.Formats.Tar.TarFile.ExtractToDirectory(gz, dest, overwriteFiles: true);
-            }
-
-            FlattenSingleTopDir(dest);
-            EnsureExecutable(Path.Combine(dest, "bin", "ffmpeg"));
-            EnsureExecutable(Path.Combine(dest, "ffmpeg"));
-            try { File.Delete(archivePath); } catch { /* ignore */ }
-
-            if (!File.Exists(Path.Combine(dest, "lib", "libobs.so.0")))
-            {
-                Log.Error("Downloaded Linux OBS bundle has no lib/libobs.so.0 (unexpected layout).");
-                throw new Exception("linux-obs-bad-bundle");
-            }
-
-            Log.Information($"Linux OBS runtime ready at {dest}; restarting to apply.");
-            await ShowModal("Recorder ready", "The recorder finished downloading. Segra will restart to apply it.", "info");
-            await Task.Delay(500);
-
-            // Re-exec so LD_LIBRARY_PATH / PATH / GStreamer plugin path pick up the new runtime.
-            Platform.Linux.LinuxObsRuntime.ConfigureAndReexecIfNeeded();
-        }
-
-        private static void EnsureExecutable(string path)
-        {
-            try
-            {
-                if (File.Exists(path))
-                    File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute
-                        | UnixFileMode.GroupRead | UnixFileMode.GroupExecute | UnixFileMode.OtherRead | UnixFileMode.OtherExecute);
-            }
-            catch { /* best effort */ }
-        }
-
-        // If the archive extracted everything under a single top-level folder, move it up so lib/ is at root.
-        private static void FlattenSingleTopDir(string dest)
-        {
-            if (File.Exists(Path.Combine(dest, "lib", "libobs.so.0"))) return;
-            var subdirs = Directory.GetDirectories(dest);
-            var files = Directory.GetFiles(dest);
-            if (subdirs.Length == 1 && files.Length == 0)
-            {
-                string inner = subdirs[0];
-                foreach (var e in Directory.GetFileSystemEntries(inner))
-                    Directory.Move(e, Path.Combine(dest, Path.GetFileName(e)));
-                Directory.Delete(inner, true);
-            }
-        }
-
         // Locate a system-installed libobs (obs-studio package) across common library directories.
         private static string? LinuxSystemLibObsPath()
         {
@@ -3617,7 +3611,7 @@ namespace Segra.Backend.Recorder
             Log.Information("Checking if OBS is installed");
 
 #if !WINDOWS
-            // Linux: use an already-resolved runtime (downloaded/bundled/system), else download the bundle.
+            // Linux: use an already-resolved runtime (downloaded/bundled/system), the caller shows install steps otherwise
             if (IsOBSInstalled())
             {
                 Log.Information("OBS runtime found (downloaded, bundled, or system)");
@@ -3625,7 +3619,7 @@ namespace Segra.Backend.Recorder
                 return;
             }
 
-            await DownloadLinuxObsRuntimeAsync();
+            throw new Exception("No OBS runtime found");
 #else
             if (isUpdate)
             {

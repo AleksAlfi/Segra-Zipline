@@ -23,7 +23,24 @@ namespace Segra.Backend.Core.Models
         public static Settings Instance => _instance;
         public bool _isBulkUpdating = false;
 
-        private string _contentFolder = Shared.PathUtils.Normalize(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyVideos), "Segra"));
+        // On Linux, MyVideos is "" when ~/Videos doesn't exist. Runs during Settings init, so it must not throw.
+        public static string DefaultContentFolder()
+        {
+            string videos;
+            try
+            {
+                videos = Environment.GetFolderPath(Environment.SpecialFolder.MyVideos, Environment.SpecialFolderOption.Create);
+            }
+            catch (Exception)
+            {
+                videos = "";
+            }
+            if (string.IsNullOrEmpty(videos))
+                videos = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+            return Shared.PathUtils.Normalize(Path.Combine(videos, "Segra"));
+        }
+
+        private string _contentFolder = DefaultContentFolder();
         private string _cacheFolder = Shared.PathUtils.Normalize(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Segra"));
         private string _resolution = "1440p";
         private int _frameRate = 60;
@@ -39,6 +56,7 @@ namespace Segra.Backend.Core.Models
         private Codec? _codec = null; // Set in SelectDefaultCodec()
         private string? _selectedOBSVersion = null; // null means automatic (latest non-beta)
         private string? _hotkeyBrokerDeclinedVersion = null; // bundled broker version whose install was declined or failed
+        private string? _pipeWireRestoreToken = null; // lets the Wayland screen-share portal skip its picker
         private bool _pendingOBSUpdate = false;
         private int _storageLimit = 100;
         private List<DeviceSetting> _inputDevices = new List<DeviceSetting>();
@@ -51,7 +69,8 @@ namespace Segra.Backend.Core.Models
         private double _highlightPaddingAfter = 4;
         private bool _runOnStartup = false;
         private StartupWindowMode _startupWindowMode = StartupWindowMode.Minimized;
-        private CloseButtonAction _closeButtonAction = CloseButtonAction.Minimize;
+        // Linux has no tray, so closing to it left the app running with no visible way to quit
+        private CloseButtonAction _closeButtonAction = OperatingSystem.IsWindows() ? CloseButtonAction.Minimize : CloseButtonAction.Exit;
         private bool _receiveBetaUpdates = false;
         private bool _autoInstallUpdates = true;
         private bool _airplaneMode = false;
@@ -964,6 +983,21 @@ namespace Segra.Backend.Core.Models
             }
         }
 
+        // Backend-owned: the portal's restore token from the last Wayland display capture,
+        // so the next recording reuses the picked screen. Not applied from frontend updates.
+        [JsonPropertyName("pipeWireRestoreToken")]
+        public string? PipeWireRestoreToken
+        {
+            get => _pipeWireRestoreToken;
+            set
+            {
+                if (_pipeWireRestoreToken != value)
+                {
+                    _pipeWireRestoreToken = value;
+                }
+            }
+        }
+
         [JsonPropertyName("pendingOBSUpdate")]
         public bool PendingOBSUpdate
         {
@@ -1485,6 +1519,18 @@ namespace Segra.Backend.Core.Models
         // audio (desktop/game capture), independent of the player's own in-game/OS volume.
         [JsonPropertyName("volumeOverride")]
         public float? VolumeOverride { get; set; }
+
+        [JsonPropertyName("highlightPaddingOverride")]
+        public GameHighlightPaddingOverride? HighlightPaddingOverride { get; set; }
+    }
+
+    public class GameHighlightPaddingOverride
+    {
+        [JsonPropertyName("before")]
+        public double Before { get; set; } = 4;
+
+        [JsonPropertyName("after")]
+        public double After { get; set; } = 4;
     }
 
     // Mirrors the global video quality settings. When Preset is "low"/"standard"/"high" the concrete
@@ -1594,5 +1640,14 @@ namespace Segra.Backend.Core.Models
 
         [JsonPropertyName("battlefield6")]
         public GameIntegrationSettings Battlefield6 { get; set; } = new GameIntegrationSettings(true);
+
+        [JsonPropertyName("valorant")]
+        public GameIntegrationSettings Valorant { get; set; } = new GameIntegrationSettings(true);
+
+        [JsonPropertyName("overwatch")]
+        public GameIntegrationSettings Overwatch { get; set; } = new GameIntegrationSettings(true);
+
+        [JsonPropertyName("fortnite")]
+        public GameIntegrationSettings Fortnite { get; set; } = new GameIntegrationSettings(true);
     }
 }

@@ -120,6 +120,8 @@
     <Compile Remove="Backend\Games\Wardogs\WardogsIntegration.cs" />
     <Compile Remove="Backend\Games\Deadlock\DeadlockIntegration.cs" />
     <Compile Remove="Backend\Games\Battlefield6\Battlefield6Integration.cs" />
+    <Compile Remove="Backend\Games\Valorant\ValorantIntegration.cs" />
+    <Compile Remove="Backend\Games\Overwatch\OverwatchIntegration.cs" />
     <Compile Remove="Backend\Platform\Windows\**\*.cs" />
     <Compile Remove="Backend\Windows\Input\HotkeyBroker\**\*.cs" />
   </ItemGroup>
@@ -191,6 +193,9 @@
     <Delete Files="@(PackagedFrontendFiles)" />
     <Copy SourceFiles="@(FrontendDistFiles)" DestinationFiles="@(FrontendDistFiles->'Resources\wwwroot\%(RecursiveDir)%(Filename)%(Extension)')" />
   </Target>
+
+  <!-- Build the frontend once before the per-TFM builds run in parallel and race on Frontend/dist. -->
+  <Target Name="BuildFrontendAssetsBeforeInnerBuilds" BeforeTargets="DispatchToInnerBuilds" DependsOnTargets="BuildFrontendAssets" />
 
   <Target Name="IncludeFrontendAssets" BeforeTargets="_CalculateEmbeddedFilesManifestInputs" DependsOnTargets="BuildFrontendAssets">
     <ItemGroup>

@@ -63,6 +63,9 @@ export interface State {
   recordingDriveUsedGb: number | null;
   recordingDriveFreeGb: number | null;
   cacheFolder: string;
+  platform: 'windows' | 'linux';
+  usesScreenSharePicker: boolean;
+  hotkeysNeedInputGroup: boolean;
   // Windows only; the backend leaves it unset elsewhere.
   hotkeyBroker?: HotkeyBrokerStatus | null;
 }
@@ -204,6 +207,12 @@ export interface GameSetting {
   discardSessionsWithoutBookmarksOverride: boolean | null;
   enableHdrOverride: boolean | null;
   volumeOverride: number | null; // Multiplier on top of the configured device volume (0-2)
+  highlightPaddingOverride: GameHighlightPaddingOverride | null;
+}
+
+export interface GameHighlightPaddingOverride {
+  before: number; // Seconds before a highlight moment
+  after: number; // Seconds after a highlight moment
 }
 
 export interface GameIntegrationSettings {
@@ -225,6 +234,9 @@ export interface GameIntegrations {
   wardogs: GameIntegrationSettings;
   deadlock: GameIntegrationSettings;
   battlefield6: GameIntegrationSettings;
+  valorant: GameIntegrationSettings;
+  overwatch: GameIntegrationSettings;
+  fortnite: GameIntegrationSettings;
 }
 
 export type ClipEncoder = 'gpu' | 'cpu';
@@ -312,6 +324,7 @@ export interface Settings {
   selectedDisplay: Display | null;
   selectedOBSVersion: string | null; // null means automatic (latest non-beta)
   hotkeyBrokerDeclinedVersion: string | null; // backend-owned, mirrored only
+  pipeWireRestoreToken: string | null; // backend-owned, mirrored only
   enableAi: boolean;
   autoGenerateHighlights: boolean;
   runOnStartup: boolean;
@@ -378,6 +391,9 @@ export const initialState: State = {
   recordingDriveUsedGb: null,
   recordingDriveFreeGb: null,
   cacheFolder: '',
+  platform: 'windows',
+  usesScreenSharePicker: false,
+  hotkeysNeedInputGroup: false,
 };
 
 export const initialSettings: Settings = {
@@ -401,6 +417,7 @@ export const initialSettings: Settings = {
   selectedDisplay: null, // Default to null (auto-select)
   selectedOBSVersion: null, // null means automatic (latest non-beta)
   hotkeyBrokerDeclinedVersion: null,
+  pipeWireRestoreToken: null,
   enableAi: true,
   autoGenerateHighlights: true,
   runOnStartup: false,
@@ -465,6 +482,9 @@ export const initialSettings: Settings = {
     wardogs: { enabled: true },
     deadlock: { enabled: true },
     battlefield6: { enabled: true },
+    valorant: { enabled: true },
+    overwatch: { enabled: true },
+    fortnite: { enabled: true },
   },
 };
 

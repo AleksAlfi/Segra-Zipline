@@ -31,7 +31,8 @@ namespace Segra.Backend.Games
         protected record OcrConfig
         {
             public required string LogPrefix { get; init; }
-            public required CropRegion CropRegion { get; init; }
+            // Read on every poll, null for integrations that only read the screen in OnPoll
+            public required CropRegion? CropRegion { get; init; }
             public required IReadOnlyList<OcrKeyword> Keywords { get; init; }
             // 0 = grayscale only, no binarization
             public int Threshold { get; init; } = 150;
@@ -122,11 +123,14 @@ namespace Segra.Backend.Games
                         continue;
                     }
 
-                    var result = await Recognize(source, _config.CropRegion, _config.Threshold).ConfigureAwait(false);
-                    if (result != null)
-                        ProcessText(result.Text);
+                    if (ShouldPoll())
+                    {
+                        var result = _config.CropRegion == null ? null : await Recognize(source, _config.CropRegion, _config.Threshold).ConfigureAwait(false);
+                        if (result != null)
+                            ProcessText(result.Text);
 
-                    await OnPoll(source).ConfigureAwait(false);
+                        await OnPoll(source).ConfigureAwait(false);
+                    }
                 }
                 catch (OperationCanceledException)
                 {
@@ -145,6 +149,11 @@ namespace Segra.Backend.Games
         /// Runs after the main region on every poll, for integrations that read more of the screen.
         /// </summary>
         protected virtual Task OnPoll(GameCapture source) => Task.CompletedTask;
+
+        /// <summary>
+        /// Whether to read the screen on this poll, for integrations that know when the game is in a menu.
+        /// </summary>
+        protected virtual bool ShouldPoll() => true;
 
         /// <summary>
         /// Captures a region of the game and runs OCR on it, rotated clockwise by the given degrees.
