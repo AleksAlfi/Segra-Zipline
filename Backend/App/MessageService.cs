@@ -3,6 +3,7 @@ using System.Net;
 using System.Reflection;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Segra.Backend.Auth;
 using Segra.Backend.Core;
 using Segra.Backend.Games;
@@ -45,7 +46,8 @@ namespace Segra.Backend.App
             "ReleaseNotes",
             "pong",
             "RecordingPreviewState",
-            "RecordingPreviewFrame"
+            "RecordingPreviewFrame",
+            "MigrationStatus"
         };
 
         private const int MaxPendingModals = 10;
@@ -158,9 +160,9 @@ namespace Segra.Backend.App
                             break;
                         case "CancelUpload":
                             if (root.TryGetProperty("Parameters", out var cancelUploadParams) &&
-                                cancelUploadParams.TryGetProperty("fileName", out var uploadFileName))
+                                cancelUploadParams.TryGetProperty("uploadId", out var uploadIdElement))
                             {
-                                UploadService.CancelUpload(uploadFileName.GetString()!);
+                                UploadService.CancelUpload(uploadIdElement.GetString()!);
                             }
                             break;
                         case "OpenFileLocation":
@@ -274,6 +276,11 @@ namespace Segra.Backend.App
                             });
 
                             await UpdateService.SendCurrentUpdateProgressToFrontend();
+                            await SendFrontendMessage("MigrationStatus", new
+                            {
+                                isRunning = MigrationService.IsRunning && !Program.IsFirstRun,
+                                currentMigration = MigrationService.CurrentMigration,
+                            });
                             await FlushPendingModalsAsync();
                             _ = Task.Run(() => UpdateService.GetReleaseNotes());
                             break;
@@ -284,6 +291,19 @@ namespace Segra.Backend.App
                         case "SetCacheLocation":
                             await SetCacheLocationAsync();
                             Log.Information("SetCacheLocation command received.");
+                            break;
+                        case "SetHotkeysPaused":
+                            root.TryGetProperty("Parameters", out JsonElement hotkeysPausedElement);
+                            Segra.Backend.Windows.Input.HotkeyCaptureService.SetPaused(
+                                hotkeysPausedElement.ValueKind == JsonValueKind.Object
+                                && hotkeysPausedElement.TryGetProperty("paused", out JsonElement pausedElement)
+                                && pausedElement.ValueKind == JsonValueKind.True);
+                            break;
+                        case "ResetScreenSelection":
+                            Settings.Instance.PipeWireRestoreToken = null;
+                            SettingsService.SaveSettings();
+                            _ = SendSettingsToFrontend("Screen selection reset");
+                            Log.Information("Cleared the saved screen-share choice; the next display capture asks again");
                             break;
                         case "UpdateSettings":
                             root.TryGetProperty("Parameters", out JsonElement settingsParameterElement);
@@ -412,7 +432,7 @@ namespace Segra.Backend.App
 
                     if (content != null && !string.IsNullOrEmpty(content.FilePath))
                     {
-                        await ContentService.DeleteContent(content.FilePath, content.Type, content.Id, sendToFrontend: false);
+                        await ContentService.DeleteContent(content.FilePath, content.Type, content.Id, reloadState: false);
                         Log.Information($"Deleted content: {content.FileName}");
                     }
                     else
@@ -660,6 +680,28 @@ namespace Segra.Backend.App
                     type = modal.Type
                 });
             }
+        }
+
+        // Settings a recording reads when it starts; the frontend compares these to show pending changes
+        private static readonly string[] RecordingStartSettingKeys =
+        [
+            "recordingMode", "resolution", "frameRate", "rateControl", "bitrate", "minBitrate", "maxBitrate",
+            "crfValue", "cqLevel", "encoder", "codec", "stretch4By3", "enableHdr", "replayBufferDuration",
+            "replayBufferMaxSize", "inputDevices", "outputDevices", "forceMonoInputSources", "inputNoiseSuppression",
+            "enableSeparateAudioTracks", "audioOutputMode", "gameIntegrations"
+        ];
+
+        // Serialized exactly like the Settings message so the frontend can compare values directly
+        public static JsonObject GetRecordingStartSettings()
+        {
+            var settings = JsonSerializer.SerializeToNode(Settings.Instance, jsonOptions)!.AsObject();
+            var snapshot = new JsonObject();
+            foreach (var key in RecordingStartSettingKeys)
+            {
+                if (settings[key] is { } value)
+                    snapshot[key] = value.DeepClone();
+            }
+            return snapshot;
         }
 
         public static async Task SendSettingsToFrontend(string cause)

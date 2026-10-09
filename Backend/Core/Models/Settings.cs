@@ -1,6 +1,7 @@
 using Serilog;
 using Segra.Backend.App;
 using Segra.Backend.Platform;
+using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 
 namespace Segra.Backend.Core.Models
@@ -22,7 +23,24 @@ namespace Segra.Backend.Core.Models
         public static Settings Instance => _instance;
         public bool _isBulkUpdating = false;
 
-        private string _contentFolder = Shared.PathUtils.Normalize(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyVideos), "Segra"));
+        // On Linux, MyVideos is "" when ~/Videos doesn't exist. Runs during Settings init, so it must not throw.
+        public static string DefaultContentFolder()
+        {
+            string videos;
+            try
+            {
+                videos = Environment.GetFolderPath(Environment.SpecialFolder.MyVideos, Environment.SpecialFolderOption.Create);
+            }
+            catch (Exception)
+            {
+                videos = "";
+            }
+            if (string.IsNullOrEmpty(videos))
+                videos = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+            return Shared.PathUtils.Normalize(Path.Combine(videos, "Segra"));
+        }
+
+        private string _contentFolder = DefaultContentFolder();
         private string _cacheFolder = Shared.PathUtils.Normalize(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Segra"));
         private string _resolution = "1440p";
         private int _frameRate = 60;
@@ -38,11 +56,11 @@ namespace Segra.Backend.Core.Models
         private Codec? _codec = null; // Set in SelectDefaultCodec()
         private string? _selectedOBSVersion = null; // null means automatic (latest non-beta)
         private string? _hotkeyBrokerDeclinedVersion = null; // bundled broker version whose install was declined or failed
+        private string? _pipeWireRestoreToken = null; // lets the Wayland screen-share portal skip its picker
         private bool _pendingOBSUpdate = false;
         private int _storageLimit = 100;
         private List<DeviceSetting> _inputDevices = new List<DeviceSetting>();
         private List<DeviceSetting> _outputDevices = new List<DeviceSetting>();
-        private bool _forceMonoInputSources = false;
         private Display? _selectedDisplay = null;
         private WindowState? _lastWindowState = null;
         private bool _enableAi = true;
@@ -51,14 +69,16 @@ namespace Segra.Backend.Core.Models
         private double _highlightPaddingAfter = 4;
         private bool _runOnStartup = false;
         private StartupWindowMode _startupWindowMode = StartupWindowMode.Minimized;
-        private CloseButtonAction _closeButtonAction = CloseButtonAction.Minimize;
+        // Linux has no tray, so closing to it left the app running with no visible way to quit
+        private CloseButtonAction _closeButtonAction = OperatingSystem.IsWindows() ? CloseButtonAction.Minimize : CloseButtonAction.Exit;
         private bool _receiveBetaUpdates = false;
         private bool _autoInstallUpdates = true;
         private bool _airplaneMode = false;
         private RecordingMode _recordingMode = RecordingMode.Hybrid;
         private int _replayBufferDuration = 30;
         private int _replayBufferMaxSize = 1000;
-        private List<Keybind> _keybindings;
+        private bool _alwaysOnReplayBuffer = false;
+        private List<Hotkey> _hotkeys;
         private List<GameSetting> _games = new List<GameSetting>();
         private bool _autoRecordGames = true;
         private Auth _auth = new Auth();
@@ -82,7 +102,6 @@ namespace Segra.Backend.Core.Models
         private bool _showAudioWaveformInTimeline = true;
         private bool _enableSeparateAudioTracks = false;
         private AudioOutputMode _audioOutputMode = AudioOutputMode.All;
-        private bool _inputNoiseSuppression = true;
         private string _videoQualityPreset = "high";
         private string _clipQualityPreset = "standard";
         private bool _confirmBeforeDeleting = false;
@@ -95,21 +114,21 @@ namespace Segra.Backend.Core.Models
             .ToList();
         private string _defaultMenuItem = "Full Sessions";
 
-        private static List<Keybind> GetDefaultKeybindings()
+        private static List<Hotkey> GetDefaultHotkeys()
         {
-            return new List<Keybind>
+            return new List<Hotkey>
             {
-                new Keybind(new List<int> { 119 }, KeybindAction.CreateBookmark, true), // 119 is F8
-                new Keybind(new List<int> { 120 }, KeybindAction.ToggleRecording, true), // 120 is F9
-                new Keybind(new List<int> { 121 }, KeybindAction.SaveReplayBuffer, true), // 121 is F10
-                new Keybind(new List<int> { 122 }, KeybindAction.TogglePreview, true) // 122 is F11
+                new Hotkey(new List<int> { 119 }, HotkeyAction.CreateBookmark, true), // 119 is F8
+                new Hotkey(new List<int> { 120 }, HotkeyAction.ToggleRecording, true), // 120 is F9
+                new Hotkey(new List<int> { 121 }, HotkeyAction.SaveReplayBuffer, true), // 121 is F10
+                new Hotkey(new List<int> { 122 }, HotkeyAction.TogglePreview, true) // 122 is F11
             };
         }
 
         public Settings()
         {
             SetDefaultResolution();
-            _keybindings = GetDefaultKeybindings();
+            _hotkeys = GetDefaultHotkeys();
         }
 
         public void BeginBulkUpdate()
@@ -582,31 +601,23 @@ namespace Segra.Backend.Core.Models
             }
         }
 
-        [JsonPropertyName("forceMonoInputSources")]
-        public bool ForceMonoInputSources
+        // Keeps a display replay buffer running whenever no game or manual recording is active.
+        [JsonPropertyName("alwaysOnReplayBuffer")]
+        public bool AlwaysOnReplayBuffer
         {
-            get => _forceMonoInputSources;
-            set
-            {
-                if (_forceMonoInputSources != value)
-                {
-                    _forceMonoInputSources = value;
-                }
-            }
+            get => _alwaysOnReplayBuffer;
+            set => _alwaysOnReplayBuffer = value;
         }
 
+        // Legacy global flags, read only by the "per_device_input_options" migration, which copies them
+        // onto each input device and nulls them out. Do not use these for anything else.
+        [JsonPropertyName("forceMonoInputSources")]
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public bool? ForceMonoInputSources { get; set; }
+
         [JsonPropertyName("inputNoiseSuppression")]
-        public bool InputNoiseSuppression
-        {
-            get => _inputNoiseSuppression;
-            set
-            {
-                if (_inputNoiseSuppression != value)
-                {
-                    _inputNoiseSuppression = value;
-                }
-            }
-        }
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public bool? InputNoiseSuppression { get; set; }
 
         [JsonPropertyName("auth")]
         public Auth Auth
@@ -972,6 +983,21 @@ namespace Segra.Backend.Core.Models
             }
         }
 
+        // Backend-owned: the portal's restore token from the last Wayland display capture,
+        // so the next recording reuses the picked screen. Not applied from frontend updates.
+        [JsonPropertyName("pipeWireRestoreToken")]
+        public string? PipeWireRestoreToken
+        {
+            get => _pipeWireRestoreToken;
+            set
+            {
+                if (_pipeWireRestoreToken != value)
+                {
+                    _pipeWireRestoreToken = value;
+                }
+            }
+        }
+
         [JsonPropertyName("pendingOBSUpdate")]
         public bool PendingOBSUpdate
         {
@@ -1041,19 +1067,19 @@ namespace Segra.Backend.Core.Models
         }
 
         [JsonPropertyName("keybindings")]
-        public List<Keybind> Keybindings
+        public List<Hotkey> Hotkeys
         {
-            get => _keybindings;
+            get => _hotkeys;
             set
             {
-                _keybindings = value ?? GetDefaultKeybindings();
+                _hotkeys = value ?? GetDefaultHotkeys();
 
                 // Ensure all default actions exist
-                foreach (var defaultKeybind in GetDefaultKeybindings())
+                foreach (var defaultHotkey in GetDefaultHotkeys())
                 {
-                    if (!_keybindings.Any(k => k.Action == defaultKeybind.Action))
+                    if (!_hotkeys.Any(k => k.Action == defaultHotkey.Action))
                     {
-                        _keybindings.Add(defaultKeybind);
+                        _hotkeys.Add(defaultHotkey);
                     }
                 }
             }
@@ -1077,6 +1103,15 @@ namespace Segra.Backend.Core.Models
         public required string Name { get; set; }
         [JsonPropertyName("volume")]
         public float Volume { get; set; } = 1.0f; // Default volume for all devices initially
+
+        // Input devices only
+        [JsonPropertyName("noiseSuppression")]
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+        public bool NoiseSuppression { get; set; }
+
+        [JsonPropertyName("forceMono")]
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+        public bool ForceMono { get; set; }
     }
 
     // Equality comparer for DeviceSetting based on Id and Name
@@ -1087,7 +1122,8 @@ namespace Segra.Backend.Core.Models
             if (ReferenceEquals(x, y)) return true;
             if (ReferenceEquals(x, null) || ReferenceEquals(y, null))
                 return false;
-            return x.Id == y.Id && x.Name == y.Name && x.Volume == y.Volume;
+            return x.Id == y.Id && x.Name == y.Name && x.Volume == y.Volume
+                && x.NoiseSuppression == y.NoiseSuppression && x.ForceMono == y.ForceMono;
         }
 
         public int GetHashCode(DeviceSetting obj)
@@ -1164,6 +1200,10 @@ namespace Segra.Backend.Core.Models
 
         [JsonPropertyName("audioTrackTypes")]
         public List<string>? AudioTrackTypes { get; set; }
+
+        // Global settings at start, so the frontend can flag changes that only apply to the next recording
+        [JsonPropertyName("startSettings")]
+        public JsonObject? StartSettings { get; set; }
 
         public void AddBookmark(Bookmark bookmark)
         {
@@ -1243,7 +1283,21 @@ namespace Segra.Backend.Core.Models
 
         public DateTime CreatedAt { get; set; }
 
-        public string? UploadId { get; set; }
+        public string? UploadUrl { get; set; }
+
+        // Metadata written before the rename stored the share link under "UploadId"
+        // (a full Zipline URL, or a bare segra.tv video id from before the fork).
+        // Deserialization migrates it; the getter stays null so it is never written back.
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public string? UploadId
+        {
+            get => null;
+            set
+            {
+                if (UploadUrl != null || string.IsNullOrEmpty(value)) return;
+                UploadUrl = value.StartsWith("http") ? value : $"https://segra.tv/video/{value}";
+            }
+        }
 
         public int? IgdbId { get; set; }
 
@@ -1465,6 +1519,18 @@ namespace Segra.Backend.Core.Models
         // audio (desktop/game capture), independent of the player's own in-game/OS volume.
         [JsonPropertyName("volumeOverride")]
         public float? VolumeOverride { get; set; }
+
+        [JsonPropertyName("highlightPaddingOverride")]
+        public GameHighlightPaddingOverride? HighlightPaddingOverride { get; set; }
+    }
+
+    public class GameHighlightPaddingOverride
+    {
+        [JsonPropertyName("before")]
+        public double Before { get; set; } = 4;
+
+        [JsonPropertyName("after")]
+        public double After { get; set; } = 4;
     }
 
     // Mirrors the global video quality settings. When Preset is "low"/"standard"/"high" the concrete
@@ -1565,5 +1631,23 @@ namespace Segra.Backend.Core.Models
 
         [JsonPropertyName("rainbowSixSiege")]
         public GameIntegrationSettings RainbowSixSiege { get; set; } = new GameIntegrationSettings(true);
+
+        [JsonPropertyName("wardogs")]
+        public GameIntegrationSettings Wardogs { get; set; } = new GameIntegrationSettings(true);
+
+        [JsonPropertyName("deadlock")]
+        public GameIntegrationSettings Deadlock { get; set; } = new GameIntegrationSettings(true);
+
+        [JsonPropertyName("battlefield6")]
+        public GameIntegrationSettings Battlefield6 { get; set; } = new GameIntegrationSettings(true);
+
+        [JsonPropertyName("valorant")]
+        public GameIntegrationSettings Valorant { get; set; } = new GameIntegrationSettings(true);
+
+        [JsonPropertyName("overwatch")]
+        public GameIntegrationSettings Overwatch { get; set; } = new GameIntegrationSettings(true);
+
+        [JsonPropertyName("fortnite")]
+        public GameIntegrationSettings Fortnite { get; set; } = new GameIntegrationSettings(true);
     }
 }

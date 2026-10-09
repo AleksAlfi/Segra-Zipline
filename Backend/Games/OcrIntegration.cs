@@ -1,6 +1,8 @@
 using Serilog;
+using ObsKit.NET.Sources;
 using Segra.Backend.Recorder;
 using System.Drawing.Imaging;
+using System.Drawing.Drawing2D;
 using global::Windows.Media.Ocr;
 using Segra.Backend.Core.Models;
 using System.Runtime.InteropServices;
@@ -29,9 +31,13 @@ namespace Segra.Backend.Games
         protected record OcrConfig
         {
             public required string LogPrefix { get; init; }
-            public required CropRegion CropRegion { get; init; }
+            // Read on every poll, null for integrations that only read the screen in OnPoll
+            public required CropRegion? CropRegion { get; init; }
             public required IReadOnlyList<OcrKeyword> Keywords { get; init; }
+            // 0 = grayscale only, no binarization
             public int Threshold { get; init; } = 150;
+            // Crops are resized as if the game ran at this height, 0 = native size
+            public int ReferenceHeight { get; init; }
             public int PollIntervalMs { get; init; } = 250;
             public TimeSpan EventCooldown { get; init; } = TimeSpan.FromSeconds(5);
             public TimeSpan ExcludeCheckWindow { get; init; } = TimeSpan.FromSeconds(1.5);
@@ -45,6 +51,11 @@ namespace Segra.Backend.Games
             public required string Text { get; init; }
             public required BookmarkType BookmarkType { get; init; }
             public IReadOnlyList<string> ExcludeFragments { get; init; } = [];
+            public TimeSpan? Cooldown { get; init; }
+            // Cooldown restarts on every frame the text is seen, so a long-lived prompt fires once
+            public bool ExtendCooldownWhileVisible { get; init; }
+            // Exact and case-sensitive, for short words that fuzzy matching finds inside other words
+            public bool MatchCase { get; init; }
         }
 
         protected abstract OcrConfig GetConfig();
@@ -112,28 +123,14 @@ namespace Segra.Backend.Games
                         continue;
                     }
 
-                    var srcW = source.Width;
-                    var srcH = source.Height;
-                    if (srcW == 0 || srcH == 0)
+                    if (ShouldPoll())
                     {
-                        await Task.Delay(_config.PollIntervalMs, token).ConfigureAwait(false);
-                        continue;
+                        var result = _config.CropRegion == null ? null : await Recognize(source, _config.CropRegion, _config.Threshold).ConfigureAwait(false);
+                        if (result != null)
+                            ProcessText(result.Text);
+
+                        await OnPoll(source).ConfigureAwait(false);
                     }
-
-                    var crop = _config.CropRegion;
-                    var cropX = (uint)(srcW * crop.X);
-                    var cropY = (uint)(srcH * crop.Y);
-                    var cropW = (uint)(srcW * crop.Width);
-                    var cropH = (uint)(srcH * crop.Height);
-
-                    var screenshot = source.TakeScreenshot(cropX, cropY, cropW, cropH);
-                    if (screenshot == null)
-                    {
-                        await Task.Delay(_config.PollIntervalMs, token).ConfigureAwait(false);
-                        continue;
-                    }
-
-                    await ProcessScreenshot(screenshot.Pixels, screenshot.Width, screenshot.Height).ConfigureAwait(false);
                 }
                 catch (OperationCanceledException)
                 {
@@ -148,11 +145,52 @@ namespace Segra.Backend.Games
             }
         }
 
-        private async Task ProcessScreenshot(byte[] pixels, uint width, uint height)
+        /// <summary>
+        /// Runs after the main region on every poll, for integrations that read more of the screen.
+        /// </summary>
+        protected virtual Task OnPoll(GameCapture source) => Task.CompletedTask;
+
+        /// <summary>
+        /// Whether to read the screen on this poll, for integrations that know when the game is in a menu.
+        /// </summary>
+        protected virtual bool ShouldPoll() => true;
+
+        /// <summary>
+        /// Captures a region of the game and runs OCR on it, rotated clockwise by the given degrees.
+        /// Local contrast keeps only what is brighter than its surroundings, for light text over bright scenery,
+        /// and drops long horizontal lines like the outlines of boxed labels.
+        /// Returns null when no frame is available.
+        /// </summary>
+        protected async Task<OcrResult?> Recognize(GameCapture source, CropRegion crop, int threshold, float rotation = 0, bool localContrast = false)
         {
-            int w = (int)width;
-            int h = (int)height;
-            int threshold = _config.Threshold;
+            var srcW = source.Width;
+            var srcH = source.Height;
+            if (srcW == 0 || srcH == 0)
+                return null;
+
+            var cropX = (uint)(srcW * crop.X);
+            var cropY = (uint)(srcH * crop.Y);
+            var cropW = (uint)(srcW * crop.Width);
+            var cropH = (uint)(srcH * crop.Height);
+
+            var screenshot = source.TakeScreenshot(cropX, cropY, cropW, cropH);
+            if (screenshot == null)
+                return null;
+
+            var pixels = screenshot.Pixels;
+            int w = (int)screenshot.Width;
+            int h = (int)screenshot.Height;
+
+            var grays = new byte[w * h];
+            for (int i = 0; i < grays.Length; i++)
+                grays[i] = (byte)((pixels[i * 4 + 2] * 77 + pixels[i * 4 + 1] * 150 + pixels[i * 4] * 29) >> 8);
+
+            // At 1080p: 6 px radius (about half a letter) and lines from 25 px
+            if (localContrast)
+            {
+                SubtractLocalMean(grays, w, h, Math.Max((int)srcH / 180, 1));
+                EraseHorizontalLines(grays, w, h, Math.Max((int)srcH * 25 / 1080, 2));
+            }
 
             // Preprocess: grayscale + threshold to isolate bright notification text
             using var bitmap = new Bitmap(w, h, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
@@ -169,13 +207,8 @@ namespace Segra.Backend.Games
 
                     for (int x = 0; x < w; x++)
                     {
-                        int si = (y * w + x) * 4;
-                        byte b = pixels[si];
-                        byte g = pixels[si + 1];
-                        byte r = pixels[si + 2];
-
-                        byte gray = (byte)((r * 77 + g * 150 + b * 29) >> 8);
-                        byte val = gray >= threshold ? (byte)255 : (byte)0;
+                        byte gray = grays[y * w + x];
+                        byte val = threshold <= 0 ? gray : gray >= threshold ? (byte)255 : (byte)0;
 
                         Marshal.WriteByte(dstPtr, x * 4, val);       // B
                         Marshal.WriteByte(dstPtr, x * 4 + 1, val);   // G
@@ -189,57 +222,135 @@ namespace Segra.Backend.Games
                 bitmap.UnlockBits(bmpData);
             }
 
+            // Scale to the reference height, Windows OCR misses small text at low resolutions
+            var scale = _config.ReferenceHeight > 0 ? (double)_config.ReferenceHeight / srcH : 1;
+            using var transformed = scale != 1 || rotation != 0 ? Transform(bitmap, scale, rotation) : null;
+
             // Convert Bitmap to SoftwareBitmap for Windows OCR
-            var softwareBitmap = await BitmapToSoftwareBitmap(bitmap).ConfigureAwait(false);
+            using var softwareBitmap = await BitmapToSoftwareBitmap(transformed ?? bitmap).ConfigureAwait(false);
             if (softwareBitmap == null)
+                return null;
+
+            return await _ocrEngine.RecognizeAsync(softwareBitmap);
+        }
+
+        /// <summary>
+        /// Matches the main region's text against the configured keywords.
+        /// </summary>
+        protected virtual void ProcessText(string text)
+        {
+            // Process pending events even when OCR text is empty
+            ProcessPendingEvents(text ?? "");
+
+            if (string.IsNullOrWhiteSpace(text))
                 return;
 
-            using (softwareBitmap)
+            Log.Debug($"[{_config.LogPrefix}] OCR text: {text}");
+
+            foreach (var keyword in _config.Keywords)
             {
-                var result = await _ocrEngine.RecognizeAsync(softwareBitmap);
-                var text = result.Text;
+                if (keyword.MatchCase ? !text.Contains(keyword.Text, StringComparison.Ordinal) : !FuzzyContains(text, keyword.Text))
+                    continue;
 
-                // Process pending events even when OCR text is empty
-                ProcessPendingEvents(text ?? "");
-
-                if (string.IsNullOrWhiteSpace(text))
-                    return;
-
-                Log.Debug($"[{_config.LogPrefix}] OCR text: {text}");
-
-                foreach (var keyword in _config.Keywords)
+                var now = DateTime.UtcNow;
+                if (now - _lastEventTime[keyword.BookmarkType] < (keyword.Cooldown ?? _config.EventCooldown))
                 {
-                    if (!FuzzyContains(text, keyword.Text))
-                        continue;
+                    if (keyword.ExtendCooldownWhileVisible)
+                        _lastEventTime[keyword.BookmarkType] = now;
+                    continue;
+                }
 
-                    var now = DateTime.UtcNow;
-                    if (now - _lastEventTime[keyword.BookmarkType] < _config.EventCooldown)
+                if (keyword.ExcludeFragments.Count > 0)
+                {
+                    // If exclude fragment already visible on this frame, skip entirely
+                    if (keyword.ExcludeFragments.Any(f => text.Contains(f, StringComparison.OrdinalIgnoreCase)))
                         break;
 
-                    if (keyword.ExcludeFragments.Count > 0)
+                    // Defer: wait for ExcludeCheckWindow before confirming
+                    if (!_pendingEvents.ContainsKey(keyword.BookmarkType))
                     {
-                        // If exclude fragment already visible on this frame, skip entirely
-                        if (keyword.ExcludeFragments.Any(f => text.Contains(f, StringComparison.OrdinalIgnoreCase)))
-                            break;
+                        _pendingEvents[keyword.BookmarkType] = new PendingEvent(
+                            keyword.Text, keyword.ExcludeFragments, now, DateTime.Now);
+                        Log.Debug($"[{_config.LogPrefix}] Pending '{keyword.Text}' detection, waiting for confirmation");
+                    }
+                }
+                else
+                {
+                    // No exclude fragments, confirm immediately
+                    _lastEventTime[keyword.BookmarkType] = now;
+                    AddBookmark(keyword.BookmarkType);
+                    Log.Information($"[{_config.LogPrefix}] Detected '{keyword.Text}' in OCR text -> {keyword.BookmarkType}");
+                }
+                break;
+            }
+        }
 
-                        // Defer: wait for ExcludeCheckWindow before confirming
-                        if (!_pendingEvents.ContainsKey(keyword.BookmarkType))
-                        {
-                            _pendingEvents[keyword.BookmarkType] = new PendingEvent(
-                                keyword.Text, keyword.ExcludeFragments, now, DateTime.Now);
-                            Log.Debug($"[{_config.LogPrefix}] Pending '{keyword.Text}' detection, waiting for confirmation");
-                        }
-                    }
-                    else
-                    {
-                        // No exclude fragments — confirm immediately
-                        _lastEventTime[keyword.BookmarkType] = now;
-                        AddBookmark(keyword.BookmarkType);
-                        Log.Information($"[{_config.LogPrefix}] Detected '{keyword.Text}' in OCR text -> {keyword.BookmarkType}");
-                    }
-                    break;
+        // Subtracts the mean of the surrounding box and amplifies what is left
+        private static void SubtractLocalMean(byte[] grays, int w, int h, int radius)
+        {
+            var sums = new long[(w + 1) * (h + 1)];
+            for (int y = 0; y < h; y++)
+            {
+                long rowSum = 0;
+                for (int x = 0; x < w; x++)
+                {
+                    rowSum += grays[y * w + x];
+                    sums[(y + 1) * (w + 1) + x + 1] = sums[y * (w + 1) + x + 1] + rowSum;
                 }
             }
+
+            for (int y = 0; y < h; y++)
+            {
+                int y0 = Math.Max(y - radius, 0), y1 = Math.Min(y + radius + 1, h);
+                for (int x = 0; x < w; x++)
+                {
+                    int x0 = Math.Max(x - radius, 0), x1 = Math.Min(x + radius + 1, w);
+                    long sum = sums[y1 * (w + 1) + x1] - sums[y0 * (w + 1) + x1] - sums[y1 * (w + 1) + x0] + sums[y0 * (w + 1) + x0];
+                    int mean = (int)(sum / ((x1 - x0) * (y1 - y0)));
+                    grays[y * w + x] = (byte)Math.Clamp((grays[y * w + x] - mean) * 6, 0, 255);
+                }
+            }
+        }
+
+        // Letters only have short horizontal strokes, longer lines are box outlines that stop OCR from finding the text
+        private static void EraseHorizontalLines(byte[] grays, int w, int h, int minLength)
+        {
+            for (int y = 0; y < h; y++)
+            {
+                int start = 0;
+                for (int x = 0; x <= w; x++)
+                {
+                    if (x < w && grays[y * w + x] >= 40)
+                        continue;
+                    if (x - start >= minLength)
+                        Array.Clear(grays, y * w + start, x - start);
+                    start = x + 1;
+                }
+            }
+        }
+
+        // The canvas grows to fit the rotated image, uncovered corners stay black
+        private static Bitmap Transform(Bitmap bitmap, double scale, float rotation)
+        {
+            float w = (float)(bitmap.Width * scale);
+            float h = (float)(bitmap.Height * scale);
+            double radians = rotation * Math.PI / 180;
+            float cos = (float)Math.Abs(Math.Cos(radians));
+            float sin = (float)Math.Abs(Math.Sin(radians));
+
+            var result = new Bitmap(
+                (int)(w * cos + h * sin),
+                (int)(w * sin + h * cos),
+                System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+
+            using var graphics = Graphics.FromImage(result);
+            graphics.Clear(Color.Black);
+            graphics.InterpolationMode = InterpolationMode.HighQualityBicubic;
+            graphics.PixelOffsetMode = PixelOffsetMode.HighQuality;
+            graphics.TranslateTransform(result.Width / 2f, result.Height / 2f);
+            graphics.RotateTransform(rotation);
+            graphics.DrawImage(bitmap, -w / 2, -h / 2, w, h);
+            return result;
         }
 
         private static async Task<SoftwareBitmap?> BitmapToSoftwareBitmap(Bitmap bitmap)
@@ -265,7 +376,7 @@ namespace Segra.Backend.Games
         /// Splits OCR text into sliding windows of the keyword's word count and
         /// checks Levenshtein distance against a threshold.
         /// </summary>
-        private static bool FuzzyContains(string text, string keyword)
+        protected static bool FuzzyContains(string text, string keyword)
         {
             // Exact match first (fast path)
             if (text.Contains(keyword, StringComparison.OrdinalIgnoreCase))
@@ -314,7 +425,7 @@ namespace Segra.Backend.Games
         /// <summary>
         /// Computes the Levenshtein edit distance between two strings.
         /// </summary>
-        private static int LevenshteinDistance(string s, string t)
+        protected static int LevenshteinDistance(string s, string t)
         {
             int n = s.Length, m = t.Length;
             if (n == 0) return m;
@@ -381,7 +492,7 @@ namespace Segra.Backend.Games
                 _pendingEvents.Remove(key);
         }
 
-        private void AddBookmark(BookmarkType type, DateTime? detectionTime = null)
+        protected void AddBookmark(BookmarkType type, DateTime? detectionTime = null)
         {
             var recording = AppState.Instance.Recording;
             if (recording == null)

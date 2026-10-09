@@ -20,7 +20,7 @@ export interface Content {
   fileSizeKb: number;
   duration: string;
   createdAt: string;
-  uploadId?: string;
+  uploadUrl?: string;
   igdbId?: number;
   gameExePath?: string;
   isImported: boolean;
@@ -47,6 +47,7 @@ export interface State {
   gpuVendor: GpuVendor;
   preRecording?: PreRecording;
   recording?: Recording;
+  alwaysOnBufferActive: boolean;
   hasLoadedObs: boolean;
   content: Content[];
   inputDevices: AudioDevice[];
@@ -62,6 +63,9 @@ export interface State {
   recordingDriveUsedGb: number | null;
   recordingDriveFreeGb: number | null;
   cacheFolder: string;
+  platform: 'windows' | 'linux';
+  usesScreenSharePicker: boolean;
+  hotkeysNeedInputGroup: boolean;
   // Windows only; the backend leaves it unset elsewhere.
   hotkeyBroker?: HotkeyBrokerStatus | null;
 }
@@ -88,16 +92,16 @@ export enum BookmarkSubtype {
   Headshot = 'Headshot',
 }
 
-export enum KeybindAction {
+export enum HotkeyAction {
   CreateBookmark = 'CreateBookmark',
   SaveReplayBuffer = 'SaveReplayBuffer',
   ToggleRecording = 'ToggleRecording',
   TogglePreview = 'TogglePreview',
 }
 
-export interface Keybind {
+export interface Hotkey {
   keys: number[];
-  action: KeybindAction;
+  action: HotkeyAction;
   enabled: boolean;
 }
 
@@ -115,6 +119,7 @@ export interface Recording {
   isUsingGameHook: boolean;
   isUsingWindowCapture: boolean;
   coverImageId?: string;
+  startSettings?: Partial<Settings>; // Recording-related settings as they were at start
 }
 
 export interface PreRecording {
@@ -133,6 +138,9 @@ export interface DeviceSetting {
   id: string;
   name: string;
   volume: number; // Volume from 0.0 to 1.0
+  // Input devices only
+  noiseSuppression?: boolean;
+  forceMono?: boolean;
 }
 
 export interface Display {
@@ -199,6 +207,12 @@ export interface GameSetting {
   discardSessionsWithoutBookmarksOverride: boolean | null;
   enableHdrOverride: boolean | null;
   volumeOverride: number | null; // Multiplier on top of the configured device volume (0-2)
+  highlightPaddingOverride: GameHighlightPaddingOverride | null;
+}
+
+export interface GameHighlightPaddingOverride {
+  before: number; // Seconds before a highlight moment
+  after: number; // Seconds after a highlight moment
 }
 
 export interface GameIntegrationSettings {
@@ -217,6 +231,12 @@ export interface GameIntegrations {
   warThunder: GameIntegrationSettings;
   gta: GameIntegrationSettings;
   rainbowSixSiege: GameIntegrationSettings;
+  wardogs: GameIntegrationSettings;
+  deadlock: GameIntegrationSettings;
+  battlefield6: GameIntegrationSettings;
+  valorant: GameIntegrationSettings;
+  overwatch: GameIntegrationSettings;
+  fortnite: GameIntegrationSettings;
 }
 
 export type ClipEncoder = 'gpu' | 'cpu';
@@ -301,11 +321,10 @@ export interface Settings {
   cacheFolder: string;
   inputDevices: DeviceSetting[];
   outputDevices: DeviceSetting[];
-  forceMonoInputSources: boolean;
-  inputNoiseSuppression: boolean;
   selectedDisplay: Display | null;
   selectedOBSVersion: string | null; // null means automatic (latest non-beta)
   hotkeyBrokerDeclinedVersion: string | null; // backend-owned, mirrored only
+  pipeWireRestoreToken: string | null; // backend-owned, mirrored only
   enableAi: boolean;
   autoGenerateHighlights: boolean;
   runOnStartup: boolean;
@@ -317,6 +336,7 @@ export interface Settings {
   recordingMode: RecordingMode;
   replayBufferDuration: number; // in seconds
   replayBufferMaxSize: number; // in MB
+  alwaysOnReplayBuffer: boolean; // Keep a display replay buffer running while nothing records
   highlightPaddingBefore: number; // Seconds before a highlight moment
   highlightPaddingAfter: number; // Seconds after a highlight moment
   clipClearSegmentsAfterCreatingClip: boolean;
@@ -333,7 +353,7 @@ export interface Settings {
   clipPreset: ClipPreset;
   clipKeepSeparateAudioTracks: boolean;
   copyCompressSizesMb: number[]; // Hidden setting (no UI), sizes for "Copy as X MB"
-  keybindings: Keybind[];
+  keybindings: Hotkey[];
   games: GameSetting[];
   autoRecordGames: boolean; // When false, don't auto-start recording when a game launches
   gameIntegrations: GameIntegrations;
@@ -355,6 +375,7 @@ export interface Settings {
 export const initialState: State = {
   gpuVendor: GpuVendor.Unknown,
   recording: undefined,
+  alwaysOnBufferActive: false,
   hasLoadedObs: false,
   content: [],
   inputDevices: [],
@@ -370,6 +391,9 @@ export const initialState: State = {
   recordingDriveUsedGb: null,
   recordingDriveFreeGb: null,
   cacheFolder: '',
+  platform: 'windows',
+  usesScreenSharePicker: false,
+  hotkeysNeedInputGroup: false,
 };
 
 export const initialSettings: Settings = {
@@ -390,11 +414,10 @@ export const initialSettings: Settings = {
   cacheFolder: '',
   inputDevices: [],
   outputDevices: [],
-  forceMonoInputSources: false,
-  inputNoiseSuppression: true,
   selectedDisplay: null, // Default to null (auto-select)
   selectedOBSVersion: null, // null means automatic (latest non-beta)
   hotkeyBrokerDeclinedVersion: null,
+  pipeWireRestoreToken: null,
   enableAi: true,
   autoGenerateHighlights: true,
   runOnStartup: false,
@@ -406,6 +429,7 @@ export const initialSettings: Settings = {
   recordingMode: 'Hybrid',
   replayBufferDuration: 30,
   replayBufferMaxSize: 1000,
+  alwaysOnReplayBuffer: false,
   highlightPaddingBefore: 4,
   highlightPaddingAfter: 4,
   clipClearSegmentsAfterCreatingClip: false,
@@ -436,10 +460,10 @@ export const initialSettings: Settings = {
   menuItems: DEFAULT_MENU_ITEMS,
   defaultMenuItem: 'Full Sessions',
   keybindings: [
-    { keys: [119], action: KeybindAction.CreateBookmark, enabled: true }, // 119 is F8
-    { keys: [120], action: KeybindAction.ToggleRecording, enabled: true }, // 120 is F9
-    { keys: [121], action: KeybindAction.SaveReplayBuffer, enabled: true }, // 121 is F10
-    { keys: [122], action: KeybindAction.TogglePreview, enabled: true }, // 122 is F11
+    { keys: [119], action: HotkeyAction.CreateBookmark, enabled: true }, // 119 is F8
+    { keys: [120], action: HotkeyAction.ToggleRecording, enabled: true }, // 120 is F9
+    { keys: [121], action: HotkeyAction.SaveReplayBuffer, enabled: true }, // 121 is F10
+    { keys: [122], action: HotkeyAction.TogglePreview, enabled: true }, // 122 is F11
   ],
   games: [],
   autoRecordGames: true,
@@ -455,6 +479,12 @@ export const initialSettings: Settings = {
     warThunder: { enabled: true },
     gta: { enabled: true },
     rainbowSixSiege: { enabled: true },
+    wardogs: { enabled: true },
+    deadlock: { enabled: true },
+    battlefield6: { enabled: true },
+    valorant: { enabled: true },
+    overwatch: { enabled: true },
+    fortnite: { enabled: true },
   },
 };
 

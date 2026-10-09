@@ -16,7 +16,7 @@ import ContentMigrationCard from './Components/ContentMigrationCard';
 import ClippingCard from './Components/ClippingCard';
 import UpdateCard from './Components/UpdateCard';
 import UnavailableDeviceCard from './Components/UnavailableDeviceCard';
-import AnimatedCard from './Components/AnimatedCard';
+import StatusCardStack, { StatusCard } from './Components/StatusCardStack';
 import {
   Clapperboard,
   OctagonX,
@@ -48,11 +48,14 @@ const MENU_ICONS: Record<MenuItemId, LucideIcon> = {
 export default function Menu({ selectedMenu, onSelectMenu }: MenuProps) {
   const settings = useSettings();
   const appState = useAppState();
-  const { hasLoadedObs, recording, preRecording } = appState;
+  const { hasLoadedObs, recording, preRecording, alwaysOnBufferActive } = appState;
   const { updateInfo } = useUpdate();
   const { aiProgress } = useAiHighlights();
   const { obsDownloadProgress } = useObsDownload();
   const { migrations: contentMigrations, isMigrating } = useContentMigration();
+  const { uploads } = useUploads();
+  const { imports } = useImports();
+  const { clippingProgress } = useClipping();
   const [buttonCooldown, setButtonCooldown] = useState(false);
 
   const buttonRefs = useRef<Record<string, HTMLDivElement | null>>({});
@@ -115,6 +118,49 @@ export default function Menu({ selectedMenu, onSelectMenu }: MenuProps) {
     );
     return unavailableInput || unavailableOutput;
   };
+
+  const statusCards: StatusCard[] = [
+    ...(updateInfo ? [{ key: 'update', node: <UpdateCard /> }] : []),
+    ...Object.values(uploads).map((file) => ({
+      key: `upload:${file.uploadId}`,
+      node: <UploadCard upload={file} />,
+    })),
+    ...Object.values(imports).map((importItem) => ({
+      key: `import:${importItem.id}`,
+      node: <ImportCard importItem={importItem} />,
+    })),
+    ...Object.values(contentMigrations).map((migration) => ({
+      key: `migration:${migration.id}`,
+      node: <ContentMigrationCard migration={migration} />,
+    })),
+    ...(hasUnavailableDevices()
+      ? [{ key: 'unavailable-devices', node: <UnavailableDeviceCard /> }]
+      : []),
+    ...(preRecording || (recording && recording.endTime == null)
+      ? [
+          {
+            key: 'recording',
+            node: <RecordingCard recording={recording} preRecording={preRecording} />,
+            pinned: true,
+          },
+        ]
+      : []),
+    ...Object.values(clippingProgress).map((clipping) => ({
+      key: `clip:${clipping.id}`,
+      node: <ClippingCard clipping={clipping} />,
+    })),
+  ];
+
+  // Floats above the button without taking space, so it hides while a card sits flush on the button
+  const showAlwaysOnBuffer =
+    alwaysOnBufferActive &&
+    !recording &&
+    !preRecording &&
+    !updateInfo &&
+    Object.keys(uploads).length === 0 &&
+    Object.keys(imports).length === 0 &&
+    Object.keys(contentMigrations).length === 0 &&
+    Object.keys(clippingProgress).length === 0;
 
   return (
     <div className="bg-base-300 w-56 h-screen flex flex-col border-r border-base-400">
@@ -203,68 +249,8 @@ export default function Menu({ selectedMenu, onSelectMenu }: MenuProps) {
         </AnimatePresence>
       </div>
 
-      {/* Spacer to push content to the bottom */}
-      <div className="grow"></div>
-
       {/* Status Cards */}
-      <div className="mt-auto p-2 space-y-2">
-        <AnimatePresence>
-          {updateInfo && (
-            <AnimatedCard key="update-card">
-              <UpdateCard />
-            </AnimatedCard>
-          )}
-        </AnimatePresence>
-
-        <AnimatePresence>
-          {Object.values(useUploads().uploads).map((file) => (
-            <AnimatedCard key={file.fileName}>
-              <UploadCard upload={file} />
-            </AnimatedCard>
-          ))}
-        </AnimatePresence>
-
-        <AnimatePresence>
-          {Object.values(useImports().imports).map((importItem) => (
-            <AnimatedCard key={importItem.id}>
-              <ImportCard importItem={importItem} />
-            </AnimatedCard>
-          ))}
-        </AnimatePresence>
-
-        <AnimatePresence>
-          {Object.values(contentMigrations).map((migration) => (
-            <AnimatedCard key={migration.id}>
-              <ContentMigrationCard migration={migration} />
-            </AnimatedCard>
-          ))}
-        </AnimatePresence>
-
-        {/* Show warning if there are unavailable audio devices */}
-        <AnimatePresence>
-          {hasUnavailableDevices() && (
-            <AnimatedCard key="unavailable-device-card">
-              <UnavailableDeviceCard />
-            </AnimatedCard>
-          )}
-        </AnimatePresence>
-
-        <AnimatePresence>
-          {(preRecording || (recording && recording.endTime == null)) && (
-            <AnimatedCard key="recording-card">
-              <RecordingCard recording={recording} preRecording={preRecording} />
-            </AnimatedCard>
-          )}
-        </AnimatePresence>
-
-        <AnimatePresence>
-          {Object.values(useClipping().clippingProgress).map((clipping) => (
-            <AnimatedCard key={clipping.id}>
-              <ClippingCard clipping={clipping} />
-            </AnimatedCard>
-          ))}
-        </AnimatePresence>
-      </div>
+      <StatusCardStack cards={statusCards} />
 
       {/* OBS Loading Section */}
       {!hasLoadedObs && obsDownloadProgress !== null && obsDownloadProgress < 100 && (
@@ -281,7 +267,22 @@ export default function Menu({ selectedMenu, onSelectMenu }: MenuProps) {
       )}
 
       {/* Start and Stop Buttons */}
-      <div className="mb-4 px-4">
+      <div className="relative mb-4 px-4">
+        <AnimatePresence>
+          {showAlwaysOnBuffer && (
+            <motion.div
+              key="always-on-buffer"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.2 }}
+              className="pointer-events-none absolute inset-x-0 bottom-full mb-2 flex items-center justify-center gap-1.5 text-xs leading-none text-gray-400"
+            >
+              <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-success" />
+              Replay Buffer
+            </motion.div>
+          )}
+        </AnimatePresence>
         <div className="flex flex-col items-center z-50">
           <Button
             variant="primary"

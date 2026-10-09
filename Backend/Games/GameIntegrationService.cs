@@ -12,6 +12,12 @@ using Segra.Backend.Games.RunescapeDragonwilds;
 using Segra.Backend.Games.RocketLeague;
 using Segra.Backend.Games.GrandTheftAuto;
 using Segra.Backend.Games.RainbowSixSiege;
+using Segra.Backend.Games.Wardogs;
+using Segra.Backend.Games.Deadlock;
+using Segra.Backend.Games.Battlefield6;
+using Segra.Backend.Games.Valorant;
+using Segra.Backend.Games.Overwatch;
+using Segra.Backend.Games.Fortnite;
 #endif
 
 namespace Segra.Backend.Games
@@ -32,6 +38,12 @@ namespace Segra.Backend.Games
         private const int FIVEM_IGDB_ID = 146553;
         private const int RAGE_MP_IGDB_ID = 212734;
         private const int RAINBOW_SIX_SIEGE_IGDB_ID = 7360;
+        private const int WARDOGS_IGDB_ID = 388285;
+        private const int DEADLOCK_IGDB_ID = 301298;
+        private const int BATTLEFIELD_6_IGDB_ID = 317407;
+        private const int VALORANT_IGDB_ID = 126459;
+        private const int OVERWATCH_IGDB_ID = 125174;
+        private const int FORTNITE_IGDB_ID = 1905;
 
         private static Integration? _gameIntegration;
         private static readonly SemaphoreSlim _lock = new(1, 1);
@@ -78,6 +90,18 @@ namespace Segra.Backend.Games
                     _gameIntegration = new GtaIntegration();
                 else if ((igdbId == RAINBOW_SIX_SIEGE_IGDB_ID || gameName?.Contains("Rainbow Six Siege", StringComparison.OrdinalIgnoreCase) == true) && integrations.RainbowSixSiege.Enabled)
                     _gameIntegration = new RainbowSixSiegeIntegration();
+                else if ((igdbId == WARDOGS_IGDB_ID || gameName?.Equals("WARDOGS", StringComparison.OrdinalIgnoreCase) == true) && integrations.Wardogs.Enabled)
+                    _gameIntegration = new WardogsIntegration();
+                else if ((igdbId == DEADLOCK_IGDB_ID || gameName?.Equals("Deadlock", StringComparison.OrdinalIgnoreCase) == true) && integrations.Deadlock.Enabled)
+                    _gameIntegration = new DeadlockIntegration();
+                else if ((igdbId == BATTLEFIELD_6_IGDB_ID || gameName?.Equals("Battlefield 6", StringComparison.OrdinalIgnoreCase) == true) && integrations.Battlefield6.Enabled)
+                    _gameIntegration = new Battlefield6Integration();
+                else if ((igdbId == VALORANT_IGDB_ID || gameName?.Equals("VALORANT", StringComparison.OrdinalIgnoreCase) == true) && integrations.Valorant.Enabled)
+                    _gameIntegration = new ValorantIntegration();
+                else if ((igdbId == OVERWATCH_IGDB_ID || gameName?.Equals("Overwatch", StringComparison.OrdinalIgnoreCase) == true) && integrations.Overwatch.Enabled)
+                    _gameIntegration = new OverwatchIntegration();
+                else if ((igdbId == FORTNITE_IGDB_ID || gameName?.Equals("Fortnite", StringComparison.OrdinalIgnoreCase) == true) && integrations.Fortnite.Enabled)
+                    _gameIntegration = new FortniteIntegration();
 #endif
 
                 if (_gameIntegration == null)

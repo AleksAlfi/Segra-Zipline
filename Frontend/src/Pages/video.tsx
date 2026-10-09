@@ -11,11 +11,12 @@ import { useSegments } from '../Context/SegmentsContext';
 import { useUploads } from '../Context/UploadContext';
 import { useModal } from '../Context/ModalContext';
 import UploadModal from '../Components/UploadModal';
-import type { LucideIcon } from 'lucide-react';
+import type { LucideIcon, LucideProps } from 'lucide-react';
 import { Icon } from 'lucide-react';
 import { crosshair2Dot, soccerBall } from '@lucide/lab';
 import {
   Trash2,
+  Settings,
   SquarePlus,
   Bookmark as BookmarkIcon,
   BookmarkPlus,
@@ -27,11 +28,6 @@ import {
   RotateCcw,
   RotateCw,
   Upload,
-  Volume2,
-  VolumeX,
-  Volume1,
-  Maximize,
-  Minimize,
   ArrowLeft,
   Skull,
   Plus,
@@ -39,10 +35,10 @@ import {
   ZoomIn,
   ZoomOut,
   Headphones,
-  Copy,
-  Check,
   ChevronDown,
 } from 'lucide-react';
+import { Volume1, Volume2, VolumeX, Maximize, Minimize, Copy, Check } from 'lucide';
+import { MorphIcon } from 'morphicons/react';
 import SegmentCard from '../Components/SegmentCard';
 import { useAudioTracks } from '../Hooks/useAudioTracks';
 import { useNativeElementAudio } from '../Hooks/useNativeElementAudio';
@@ -51,13 +47,13 @@ import Button from '../Components/Button';
 import { useDeleteConfirmation } from '../Hooks/useDeleteConfirmation';
 import AudioTrackIcon from '../Components/AudioTrackIcon';
 
-const Crosshair2Dot = React.forwardRef<SVGSVGElement, React.ComponentProps<typeof Icon>>(
-  (props, ref) => <Icon {...props} ref={ref} iconNode={crosshair2Dot} />,
-) as LucideIcon;
+const Crosshair2Dot = React.forwardRef<SVGSVGElement, LucideProps>((props, ref) => (
+  <Icon {...props} ref={ref} iconNode={crosshair2Dot} />
+)) as LucideIcon;
 
-const SoccerBall = React.forwardRef<SVGSVGElement, React.ComponentProps<typeof Icon>>(
-  (props, ref) => <Icon {...props} ref={ref} iconNode={soccerBall} />,
-) as LucideIcon;
+const SoccerBall = React.forwardRef<SVGSVGElement, LucideProps>((props, ref) => (
+  <Icon {...props} ref={ref} iconNode={soccerBall} />
+)) as LucideIcon;
 
 // Converts time string in format "HH:MM:SS.mmm" to seconds
 const timeStringToSeconds = (timeStr: string): number => {
@@ -1580,6 +1576,31 @@ export default function VideoComponent({ video }: { video: Content }) {
     };
   }, [copyMenuOpen]);
 
+  const [segmentOptionsOpen, setSegmentOptionsOpen] = useState(false);
+  const segmentOptionsRef = useRef<HTMLDivElement>(null);
+
+  // The dropdown also stays visible via :focus-within, so closing drops focus too
+  const closeSegmentOptions = () => {
+    setSegmentOptionsOpen(false);
+    (document.activeElement as HTMLElement | null)?.blur();
+  };
+
+  useEffect(() => {
+    if (!segmentOptionsOpen) return;
+    const onDocMouseDown = (e: MouseEvent) => {
+      if (!segmentOptionsRef.current?.contains(e.target as Node)) setSegmentOptionsOpen(false);
+    };
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') closeSegmentOptions();
+    };
+    document.addEventListener('mousedown', onDocMouseDown);
+    document.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.removeEventListener('mousedown', onDocMouseDown);
+      document.removeEventListener('keydown', onKeyDown);
+    };
+  }, [segmentOptionsOpen]);
+
   // Last backend progress update plus its estimated speed (% per ms), used to
   // extrapolate between the sparse ffmpeg updates
   const compressRateRef = useRef<{ progress: number; time: number; rate: number } | null>(null);
@@ -1658,21 +1679,14 @@ export default function VideoComponent({ video }: { video: Content }) {
     .filter((mb) => mb > 0 && mb * 1024 < video.fileSizeKb);
 
   const copyButtons = (
-    <div className="join">
+    <div className="join relative z-30">
       <Button
         variant="primary"
         size="sm"
         className="h-10 hover:text-accent join-item"
         onClick={handleCopyFile}
       >
-        <label className={`swap overflow-hidden justify-center ${fileCopied ? 'swap-active' : ''}`}>
-          <div className="swap-off">
-            <Copy className="w-5 h-5" />
-          </div>
-          <div className="swap-on">
-            <Check className="w-5 h-5" />
-          </div>
-        </label>
+        <MorphIcon icon={fileCopied ? Check : Copy} size={20} spring="snappy" />
         <span>Copy</span>
       </Button>
       {copySizeOptions.length > 0 && (
@@ -1683,7 +1697,7 @@ export default function VideoComponent({ video }: { video: Content }) {
           <Button
             variant="primary"
             size="sm"
-            className={`h-10 hover:text-accent join-item border-l-0 px-2 ${compressCopyProgress !== null ? 'pointer-events-none' : ''}`}
+            className={`h-10 hover:text-accent join-item px-2 ${compressCopyProgress !== null ? 'pointer-events-none' : ''}`}
             aria-label="Copy as compressed file"
             aria-expanded={copyMenuOpen}
             onMouseDown={(e) => {
@@ -1973,13 +1987,11 @@ export default function VideoComponent({ video }: { video: Content }) {
                       className="text-white transition-colors cursor-pointer hover:text-accent"
                       aria-label={isMuted ? 'Unmute' : 'Mute'}
                     >
-                      {isMuted || volume < 0.2 ? (
-                        <VolumeX className="w-5 h-5" />
-                      ) : volume < 0.7 ? (
-                        <Volume1 className="w-5 h-5" />
-                      ) : (
-                        <Volume2 className="w-5 h-5" />
-                      )}
+                      <MorphIcon
+                        icon={isMuted || volume < 0.2 ? VolumeX : volume < 0.7 ? Volume1 : Volume2}
+                        size={20}
+                        spring="snappy"
+                      />
                     </button>
                     <input
                       type="range"
@@ -2146,11 +2158,11 @@ export default function VideoComponent({ video }: { video: Content }) {
                     className="text-white cursor-pointer transition-colors hover:text-accent"
                     aria-label={isFullscreen ? 'Exit Fullscreen' : 'Enter Fullscreen'}
                   >
-                    {isFullscreen ? (
-                      <Minimize className="w-5 h-5" />
-                    ) : (
-                      <Maximize className="w-5 h-5" />
-                    )}
+                    <MorphIcon
+                      icon={isFullscreen ? Minimize : Maximize}
+                      size={20}
+                      spring="snappy"
+                    />
                   </button>
                 </div>
               </div>
@@ -2448,20 +2460,20 @@ export default function VideoComponent({ video }: { video: Content }) {
               <div className="flex items-center border rounded-lg join bg-base-300 border-base-400">
                 <button
                   onClick={() => skipTime(-5)}
-                  className="h-10 text-gray-300 btn btn-sm btn-secondary hover:text-accent join-item"
+                  className="h-10 text-gray-300 btn btn-sm btn-secondary hover:text-accent join-item active:translate-none!"
                 >
                   <RotateCcw className="w-5 h-5" />
                 </button>
                 <button
                   onClick={handlePlayPause}
-                  className="h-10 text-gray-300 btn btn-sm btn-secondary hover:text-accent join-item"
+                  className="h-10 text-gray-300 btn btn-sm btn-secondary hover:text-accent join-item active:translate-none!"
                   data-tip={isPlaying ? 'Pause' : 'Play'}
                 >
                   {isPlaying ? <Pause className="w-5 h-5" /> : <Play className="w-5 h-5" />}
                 </button>
                 <button
                   onClick={() => skipTime(5)}
-                  className="h-10 text-gray-300 btn btn-sm btn-secondary hover:text-accent join-item"
+                  className="h-10 text-gray-300 btn btn-sm btn-secondary hover:text-accent join-item active:translate-none!"
                   data-tip="Forward 5s"
                 >
                   <RotateCw className="w-5 h-5" />
@@ -2475,10 +2487,11 @@ export default function VideoComponent({ video }: { video: Content }) {
                       size="sm"
                       className="h-10 px-5 hover:text-accent"
                       onClick={handleUpload}
-                      disabled={
-                        uploads[video.fileName + '.mp4']?.status === 'uploading' ||
-                        uploads[video.fileName + '.mp4']?.status === 'processing'
-                      }
+                      disabled={Object.values(uploads).some(
+                        (upload) =>
+                          upload.fileName === video.fileName + '.mp4' &&
+                          (upload.status === 'uploading' || upload.status === 'processing'),
+                      )}
                     >
                       <Upload className="w-5 h-5" />
                       <span>Upload</span>
@@ -2612,55 +2625,70 @@ export default function VideoComponent({ video }: { video: Content }) {
                 </div>
               )}
             </div>
-            <div className="flex items-center justify-between my-3 mr-3">
-              <label className="flex items-center cursor-pointer">
-                <input
-                  type="checkbox"
-                  name="clipClearSegmentsAfterCreatingClip"
-                  checked={settings.clipClearSegmentsAfterCreatingClip}
-                  onChange={(e) =>
-                    updateSettings({ clipClearSegmentsAfterCreatingClip: e.target.checked })
-                  }
-                  className="checkbox checkbox-sm checkbox-accent"
-                />
-                <span className="ml-2 text-sm">Auto-Clear Segments</span>
-              </label>
-            </div>
-            <div className="join flex mb-3 mr-3">
-              <button
-                type="button"
-                className={`btn btn-secondary join-item flex-1 h-9 min-h-9 text-xs font-semibold border-base-400 hover:border-base-400 hover:text-primary ${
-                  clipOutputMode === 'combined'
-                    ? 'bg-base-300 hover:bg-base-300 text-primary'
-                    : 'bg-base-200 hover:bg-base-200 text-gray-300'
-                }`}
-                onClick={() => setClipOutputMode('combined')}
-              >
-                Combined
-              </button>
-              <button
-                type="button"
-                className={`btn btn-secondary join-item flex-1 h-9 min-h-9 text-xs font-semibold border-base-400 hover:border-base-400 hover:text-primary ${
-                  clipOutputMode === 'separate'
-                    ? 'bg-base-300 hover:bg-base-300 text-primary'
-                    : 'bg-base-200 hover:bg-base-200 text-gray-300'
-                }`}
-                onClick={() => setClipOutputMode('separate')}
-              >
-                Separate
-              </button>
-            </div>
-            <div className="flex items-center h-10 gap-0 px-0 mb-3 mr-3 rounded-lg bg-base-300 tooltip">
+            <div className="relative flex items-center gap-2 my-3 mr-3">
               <Button
                 variant="primary"
                 size="sm"
-                className="w-full h-10 py-0 hover:text-accent"
+                className="flex-1 h-10 py-0 hover:text-accent transition-[color,background-color,border-color,opacity] duration-300"
                 onClick={handleClearSegments}
                 disabled={segments.length === 0}
               >
                 <Trash2 className="w-4 h-4" />
                 <span>Clear</span>
               </Button>
+              <div
+                ref={segmentOptionsRef}
+                className={`dropdown dropdown-top dropdown-end static! ${segmentOptionsOpen ? 'dropdown-open' : ''}`}
+              >
+                <Button
+                  variant="primary"
+                  size="sm"
+                  className="h-10 px-2.5 hover:text-accent"
+                  aria-label="Segment options"
+                  aria-expanded={segmentOptionsOpen}
+                  onMouseDown={(e) => {
+                    e.preventDefault();
+                    if (segmentOptionsOpen) closeSegmentOptions();
+                    else setSegmentOptionsOpen(true);
+                  }}
+                >
+                  <Settings className="w-4 h-4" />
+                </Button>
+                <ul
+                  tabIndex={0}
+                  className="dropdown-content menu bg-base-300 border border-base-400 rounded-lg z-[100] left-0! p-1.5 mb-2 shadow"
+                >
+                  <li>
+                    <label className="flex items-center gap-2 px-2! text-sm text-gray-300 hover:bg-transparent! active:bg-transparent!">
+                      <input
+                        type="checkbox"
+                        name="clipClearSegmentsAfterCreatingClip"
+                        checked={settings.clipClearSegmentsAfterCreatingClip}
+                        onChange={(e) =>
+                          updateSettings({ clipClearSegmentsAfterCreatingClip: e.target.checked })
+                        }
+                        className="checkbox checkbox-sm checkbox-accent"
+                      />
+                      Clear segments after clipping
+                    </label>
+                  </li>
+                  <li className="menu-title px-2 pt-2 pb-1 text-xs">Clip output</li>
+                  {(['combined', 'separate'] as const).map((mode) => (
+                    <li key={mode}>
+                      <label className="flex items-center gap-2 px-2! text-sm text-gray-300 hover:bg-transparent! active:bg-transparent!">
+                        <input
+                          type="radio"
+                          name="clipOutputMode"
+                          checked={clipOutputMode === mode}
+                          onChange={() => setClipOutputMode(mode)}
+                          className="radio radio-sm radio-accent"
+                        />
+                        {mode === 'combined' ? 'Combined' : 'Separate'}
+                      </label>
+                    </li>
+                  ))}
+                </ul>
+              </div>
             </div>
           </div>
         )}

@@ -348,7 +348,7 @@ namespace Segra.Backend.App
             Log.Information($"Rate control: {s.RateControl} (CRF={s.CrfValue}, CQ={s.CqLevel})");
             Log.Information($"Video quality preset: {s.VideoQualityPreset}");
             Log.Information($"Recording mode: {s.RecordingMode}");
-            Log.Information($"Replay buffer: duration={s.ReplayBufferDuration}s, maxSize={s.ReplayBufferMaxSize}MB");
+            Log.Information($"Replay buffer: duration={s.ReplayBufferDuration}s, maxSize={s.ReplayBufferMaxSize}MB, alwaysOn={s.AlwaysOnReplayBuffer} (active={AppState.Instance.AlwaysOnBufferActive})");
             Log.Information($"GPU vendor: {AppState.Instance.GpuVendor}");
 #if WINDOWS
             Log.Information($"NVENC capabilities: {NvencCapsService.GetCapsSummaryOrNull() ?? "<none>"}");
@@ -366,14 +366,12 @@ namespace Segra.Backend.App
             var s = Settings.Instance;
             Log.Information($"Configured input devices ({s.InputDevices.Count}):");
             foreach (var d in s.InputDevices)
-                Log.Information($"  - {d.Name} (id={d.Id}, volume={d.Volume:F2})");
+                Log.Information($"  - {d.Name} (id={d.Id}, volume={d.Volume:F2}, noiseSuppression={d.NoiseSuppression}, forceMono={d.ForceMono})");
             Log.Information($"Configured output devices ({s.OutputDevices.Count}):");
             foreach (var d in s.OutputDevices)
                 Log.Information($"  - {d.Name} (id={d.Id}, volume={d.Volume:F2})");
             Log.Information($"Detected input devices: {AppState.Instance.InputDevices.Count}");
             Log.Information($"Detected output devices: {AppState.Instance.OutputDevices.Count}");
-            Log.Information($"Force mono input: {s.ForceMonoInputSources}");
-            Log.Information($"Input noise suppression: {s.InputNoiseSuppression}");
             Log.Information($"Separate audio tracks: {s.EnableSeparateAudioTracks}");
             Log.Information($"Audio output mode: {s.AudioOutputMode}");
         }
@@ -415,7 +413,7 @@ namespace Segra.Backend.App
             try
             {
                 if (string.IsNullOrEmpty(path)) return;
-                var root = Path.GetPathRoot(path);
+                var root = StorageService.GetDriveRoot(path);
                 if (string.IsNullOrEmpty(root)) return;
                 var drive = new DriveInfo(root);
                 if (!drive.IsReady)

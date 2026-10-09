@@ -82,8 +82,11 @@ jobs:
           V: ${{ steps.ver.outputs.num }}
         run: |
           mv "output/Segra.flatpak" "output/SegraZipline.flatpak"
-          mv "output/segra-$V-x86_64.tar.gz" "output/segrazipline-$V-x86_64.tar.gz"
-          mv "output/segra-$V-x86_64.tar.gz.sha256" "output/segrazipline-$V-x86_64.tar.gz.sha256"
+          # Upstream stopped producing the Flathub payload tarball in v1.9.1; older tags still do.
+          if [ -f "output/segra-$V-x86_64.tar.gz" ]; then
+            mv "output/segra-$V-x86_64.tar.gz" "output/segrazipline-$V-x86_64.tar.gz"
+            mv "output/segra-$V-x86_64.tar.gz.sha256" "output/segrazipline-$V-x86_64.tar.gz.sha256"
+          fi
 
       # Kept independently of the release upload so a failed upload doesn't cost a 20-minute rebuild.
       - name: Upload build artifact
@@ -98,15 +101,13 @@ jobs:
           retention-days: 7
 
       - name: Attach to the release
-        # The tarball + sha256 mirror what upstream ships for Flathub manifests; the .flatpak bundle
-        # is the direct install.
+        # The .flatpak bundle is the direct install; the tarball + sha256 (pre-1.9.1 tags only)
+        # mirror what upstream shipped for Flathub manifests.
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           TAG: ${{ inputs.tag }}
-          V: ${{ steps.ver.outputs.num }}
         run: |
+          shopt -s nullglob
           gh release upload "$TAG" --repo "$REPO" --clobber \
-            "output/SegraZipline.flatpak" \
-            "output/segrazipline-$V-x86_64.tar.gz" \
-            "output/segrazipline-$V-x86_64.tar.gz.sha256"
+            output/SegraZipline.flatpak output/segrazipline-*-x86_64.tar.gz*
