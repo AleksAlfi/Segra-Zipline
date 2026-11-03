@@ -22,6 +22,7 @@ import { Link, Check } from 'lucide';
 import { MorphIcon } from 'morphicons/react';
 import { useAiHighlights } from '../Context/AiHighlightsContext';
 import { useCompression } from '../Context/CompressionContext';
+import { useContentMigration } from '../Context/ContentMigrationContext';
 import Button from './Button';
 import { useDeleteConfirmation } from '../Hooks/useDeleteConfirmation';
 
@@ -69,9 +70,12 @@ export default function ContentCard({
   const { openModal, closeModal } = useModal();
   const { aiProgress } = useAiHighlights();
   const { compressionProgress, isCompressing } = useCompression();
+  const { getContentMigrationStatus } = useContentMigration();
   const confirmDelete = useDeleteConfirmation();
 
   const isBeingCompressed = content?.filePath ? isCompressing(content.filePath) : false;
+  const migrationStatus = content?.id ? getContentMigrationStatus(content.id) : null;
+  const isBusy = isBeingCompressed || migrationStatus !== null;
   const currentCompressionProgress = content?.filePath
     ? compressionProgress[content.filePath]
     : undefined;
@@ -179,7 +183,7 @@ export default function ContentCard({
         className={
           type === 'Highlight'
             ? 'card card-compact w-full relative highlight-card'
-            : 'card card-compact bg-base-300 text-gray-300 w-full border border-[#49515b]'
+            : 'card card-compact bg-base-300 text-gray-300 w-full'
         }
       >
         {type === 'Highlight' && (
@@ -209,10 +213,10 @@ export default function ContentCard({
         {type !== 'Highlight' && (
           <>
             {/* Mirrors the loaded card's figure/body exactly so the skeleton is the same height. */}
-            <figure className="relative aspect-video bg-black">
+            <figure className="relative aspect-video border border-b-0 border-[#49515b] [background:linear-gradient(#000,#000)_padding-box,linear-gradient(#49515b,#49515b)_border-box]">
               <div className="skeleton w-full h-full rounded-none bg-base-200/75"></div>
             </figure>
-            <div className="card-body gap-1 pt-2">
+            <div className="card-body gap-1 pt-2 border border-t-0 border-[#49515b] rounded-b-[inherit]">
               <div className="flex justify-between items-center">
                 <h2 className="card-title !block w-3/4">
                   {/* Title Skeleton */}
@@ -344,8 +348,7 @@ export default function ContentCard({
     if (!isRenaming) return;
     setIsRenaming(false);
     const trimmed = renameValue.trim();
-    const invalidChars = /[<>:"/\\|?*]/;
-    if (trimmed && invalidChars.test(trimmed)) return;
+    if (trimmed === (content!.title || '')) return;
     sendMessageToBackend('RenameContent', {
       Id: content!.id,
       Title: trimmed,
@@ -392,7 +395,7 @@ export default function ContentCard({
   }, []);
 
   const openContextMenu = (event: React.MouseEvent) => {
-    if (isBeingCompressed) return;
+    if (isBusy) return;
 
     event.preventDefault();
     event.stopPropagation();
@@ -544,15 +547,16 @@ export default function ContentCard({
     <div
       ref={cardRef}
       data-content-id={content!.id}
-      className={`card card-compact bg-base-300 text-gray-300 w-full border border-[#49515b] ${isSelected ? '!outline !outline-1 !outline-primary' : ''} ${isHighlighted ? 'import-pulse' : ''} ${isBeingCompressed ? 'cursor-default opacity-75' : 'cursor-pointer'} ${isSelectionMode ? 'select-none' : ''}`}
+      className={`card card-compact bg-base-300 text-gray-300 w-full ${isSelected ? '!outline !outline-1 !outline-primary' : ''} ${isHighlighted ? 'import-pulse' : ''} ${isBusy ? 'cursor-default opacity-75' : 'cursor-pointer'} ${isSelectionMode ? 'select-none' : ''}`}
       onClick={(e) => {
-        if (isBeingCompressed) return;
+        if (isBusy) return;
         if (!isSelectionMode && !e.ctrlKey) markAsViewed();
         onClick?.(content!, e);
       }}
       onContextMenu={openContextMenu}
     >
-      <figure className="relative aspect-video bg-black">
+      {/* Draws its own border over a border-colored underlay so the rounded thumbnail corners have no dark seam. */}
+      <figure className="relative aspect-video border border-b-0 border-[#49515b] [background:linear-gradient(#000,#000)_padding-box,linear-gradient(#49515b,#49515b)_border-box]">
         {/* Shimmer crossfades out as the image fades in, so the figure never flashes black. */}
         <div
           className={`absolute inset-0 rounded-none bg-base-200/75 transition-opacity duration-200 ${thumbnailLoaded ? 'opacity-0' : 'skeleton opacity-100'}`}
@@ -591,6 +595,14 @@ export default function ContentCard({
             NEW
           </span>
         )}
+        {migrationStatus && (
+          <div className="absolute inset-0 bg-black/70 flex items-center justify-center gap-2 text-sm text-white">
+            {migrationStatus === 'moving' && (
+              <span className="loading loading-spinner loading-xs" />
+            )}
+            {migrationStatus === 'moving' ? 'Moving...' : 'Waiting to move'}
+          </div>
+        )}
         {currentCompressionProgress && (
           <div className="absolute inset-0 bg-black/60 flex flex-col items-center justify-center">
             <p className="text-white text-sm mb-2">
@@ -617,7 +629,7 @@ export default function ContentCard({
         )}
       </figure>
 
-      <div className="card-body gap-1 pt-2">
+      <div className="card-body gap-1 pt-2 border border-t-0 border-[#49515b] rounded-b-[inherit]">
         <div className="flex justify-between items-center">
           {isRenaming ? (
             <input
@@ -646,7 +658,7 @@ export default function ContentCard({
           )}
           <div
             ref={dropdownRef}
-            className={`dropdown dropdown-end ${isBeingCompressed ? 'pointer-events-none opacity-50' : ''}`}
+            className={`dropdown dropdown-end ${isBusy ? 'pointer-events-none opacity-50' : ''}`}
             onClick={(e) => e.stopPropagation()}
             onKeyDown={(e) => {
               if (e.key === 'Escape') {
@@ -673,7 +685,7 @@ export default function ContentCard({
           >
             <label
               ref={dropdownTriggerRef}
-              tabIndex={isBeingCompressed ? -1 : 0}
+              tabIndex={isBusy ? -1 : 0}
               className="btn btn-ghost btn-sm btn-circle hover:bg-white/10 active:bg-white/10"
             >
               <Ellipsis size={24} />

@@ -8,11 +8,61 @@ namespace Segra.Backend.Media
     public class FFmpegException : Exception
     {
         public int ExitCode { get; }
+        public string? Detail { get; }
 
-        public FFmpegException(int exitCode)
+        public FFmpegException(int exitCode, string? detail = null)
             : base($"FFmpeg process exited with non-zero exit code: {exitCode}")
         {
             ExitCode = exitCode;
+            Detail = detail;
+        }
+    }
+
+    // Keeps the lines that explain a failure from ffmpeg run with -loglevel level+info.
+    // A hardware encoder logs why it can't run as warnings, so those are kept when that encoder also failed.
+    internal sealed class FFmpegErrorCollector
+    {
+        private const int MaxLines = 2;
+        private static readonly Regex _levelLineRegex = new(
+            @"^(?:\[([^\]@]+?)(?: @ [^\]]*)?\] )?(?:\[[^\]]+\] )*\[(warning|error|fatal)\] (.+)$",
+            RegexOptions.Compiled);
+        private static readonly Regex _hardwareEncoderRegex = new(@"^\w+_(nvenc|amf|qsv|vaapi)$", RegexOptions.Compiled);
+
+        private readonly List<(string Context, string Message)> _errors = [];
+        private readonly List<(string Context, string Message)> _encoderWarnings = [];
+
+        public void Add(string line)
+        {
+            var match = _levelLineRegex.Match(line);
+            if (!match.Success) return;
+
+            string context = match.Groups[1].Value;
+            string message = match.Groups[3].Value.Trim();
+            if (match.Groups[2].Value == "warning")
+            {
+                if (_hardwareEncoderRegex.IsMatch(context) && _encoderWarnings.Count < 4 && !_encoderWarnings.Any(w => w.Message == message))
+                    _encoderWarnings.Add((context, message));
+            }
+            else if (_errors.Count < MaxLines && !_errors.Any(e => e.Message == message))
+            {
+                _errors.Add((context, message));
+            }
+        }
+
+        public string? Detail
+        {
+            get
+            {
+                var failedContexts = _errors.Select(e => e.Context).ToHashSet();
+                var lines = _encoderWarnings
+                    .Where(w => failedContexts.Contains(w.Context))
+                    .Concat(_errors)
+                    .Select(l => l.Message)
+                    .Distinct()
+                    .Take(MaxLines)
+                    .ToList();
+                return lines.Count > 0 ? string.Join("\n", lines) : null;
+            }
         }
     }
 
@@ -70,6 +120,7 @@ namespace Segra.Backend.Media
                 -28 => ("Ran out of disk space while writing temporary files. Free up space on your system drive (C:) and try again.", false),
                 -30 => ("The output destination is read-only and cannot be written to.", false),
                 -32 => ("The video processing tool was closed unexpectedly before finishing.", false),
+                -40 => ("The selected encoder is not supported on this system.", false),
 
                 // FFmpeg-specific
                 AVERROR_INVALIDDATA => ("The source video appears to be corrupted or in an unexpected format.", false),
@@ -111,6 +162,11 @@ namespace Segra.Backend.Media
             var (message, likelyBug) = Describe(exitCode);
             return likelyBug ? message + BugReportSuffix : message;
         }
+
+        // FFmpeg's own error lines when it printed any, otherwise a description of the exit code.
+        public static string DescribeForUser(FFmpegException ex) => ex.Detail ?? DescribeForUser(ex.ExitCode);
+
+        public static string Summarize(FFmpegException ex) => ex.Detail?.Split('\n')[0] ?? Describe(ex.ExitCode).Message;
     }
 
     public static class FFmpegService
@@ -237,6 +293,9 @@ namespace Segra.Backend.Media
                 throw new FileNotFoundException($"FFmpeg executable not found at: {FFmpegExecutable}");
             }
 
+            arguments = "-loglevel level+info " + arguments;
+            var errors = new FFmpegErrorCollector();
+
             Log.Information($"[Process {processId}] Starting FFmpeg");
             Log.Information($"[Process {processId}] FFmpeg path: {FFmpegExecutable}");
             Log.Information($"[Process {processId}] FFmpeg arguments: {arguments}");
@@ -268,6 +327,7 @@ namespace Segra.Backend.Media
                     if (string.IsNullOrEmpty(e.Data)) return;
 
                     Log.Information($"[Process {processId}] FFmpeg stderr: {e.Data}");
+                    errors.Add(e.Data);
 
                     try
                     {
@@ -306,7 +366,7 @@ namespace Segra.Backend.Media
 
                     if (process.ExitCode != 0)
                     {
-                        throw new FFmpegException(process.ExitCode);
+                        throw new FFmpegException(process.ExitCode, errors.Detail);
                     }
                 }
                 catch (Exception ex)
@@ -337,6 +397,8 @@ namespace Segra.Backend.Media
                 CreateNoWindow = true,
             };
 
+            processStartInfo.ArgumentList.Add("-loglevel");
+            processStartInfo.ArgumentList.Add("level+info");
             foreach (var arg in arguments)
             {
                 processStartInfo.ArgumentList.Add(arg);
@@ -344,13 +406,17 @@ namespace Segra.Backend.Media
 
             Log.Information("Running simple ffmpeg with arguments: {Arguments}", string.Join(" ", processStartInfo.ArgumentList));
 
+            var errors = new FFmpegErrorCollector();
             using (var process = new Process { StartInfo = processStartInfo })
             {
                 try
                 {
                     // Attach event handlers before starting
                     process.OutputDataReceived += (sender, e) => { };
-                    process.ErrorDataReceived += (sender, e) => { };
+                    process.ErrorDataReceived += (sender, e) =>
+                    {
+                        if (!string.IsNullOrEmpty(e.Data)) errors.Add(e.Data);
+                    };
 
                     process.Start();
 
@@ -364,12 +430,14 @@ namespace Segra.Backend.Media
 
                     if (process.ExitCode != 0)
                     {
-                        throw new FFmpegException(process.ExitCode);
+                        throw new FFmpegException(process.ExitCode, errors.Detail);
                     }
                 }
                 catch (Exception ex)
                 {
                     Log.Error($"Error in FFmpeg process: {ex.Message}");
+                    if (ex is FFmpegException { Detail: not null } ffEx)
+                        Log.Error($"FFmpeg error: {ffEx.Detail}");
                     throw;
                 }
             }
@@ -426,7 +494,7 @@ namespace Segra.Backend.Media
         /// <summary>
         /// Runs ffmpeg to get metadata and returns stderr output
         /// </summary>
-        public static async Task<string> GetMetadata(string inputFilePath)
+        public static async Task<string> GetMetadata(string inputFilePath, int timeoutSeconds = 2)
         {
             if (!FFmpegExists())
             {
@@ -450,7 +518,7 @@ namespace Segra.Backend.Media
             using var process = new Process { StartInfo = processStartInfo };
             process.Start();
 
-            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(timeoutSeconds));
             try
             {
                 string output = await process.StandardError.ReadToEndAsync(cts.Token);
@@ -527,18 +595,54 @@ namespace Segra.Backend.Media
             }
         }
 
+        private static readonly Regex _videoSizeRegex = new(
+            @"Video: [^\n]*?, (\d{2,5})x(\d{2,5})",
+            RegexOptions.Compiled);
+
         /// <summary>
-        /// Builds the thumbnail -vf chain. HDR sources are tone-mapped from Rec.2100 (PQ/HLG) down
-        /// to Rec.709 SDR so the JPEG is not washed out; SDR sources are only scaled.
+        /// Returns the first video stream's size and whether it is HDR, or null if it can't be read.
+        /// </summary>
+        public static async Task<(int Width, int Height, bool IsHdr)?> GetVideoFormat(string filePath)
+        {
+            try
+            {
+                // Longer than the default timeout, since a sleeping drive can take seconds to spin up
+                string metadata = await GetMetadata(filePath, timeoutSeconds: 10);
+                var match = _videoSizeRegex.Match(metadata);
+                if (!match.Success) return null;
+
+                return (int.Parse(match.Groups[1].Value, CultureInfo.InvariantCulture),
+                        int.Parse(match.Groups[2].Value, CultureInfo.InvariantCulture),
+                        ExtractIsHdr(metadata));
+            }
+            catch (Exception ex)
+            {
+                Log.Warning("Could not read the video format of {File}: {Message}", filePath, ex.Message);
+                return null;
+            }
+        }
+
+        private const double ObsSdrWhiteNits = 300;
+
+        /// <summary>
+        /// Filter chain that tone maps HDR to SDR the way OBS does when it records HDR as SDR.
+        /// </summary>
+        public static string BuildHdrToSdrFilter()
+        {
+            string toSdrWhite = (10000 / ObsSdrWhiteNits).ToString(CultureInfo.InvariantCulture);
+            string curve = $"st(0,val/65535*{toSdrWhite});st(1,pow(ld(0)/(ld(0)+1),1/2.4));" +
+                           "if(lte(ld(1),0.04045),ld(1)/12.92,pow((ld(1)+0.055)/1.055,2.4))*65535";
+            return $"zscale=t=linear:npl=10000,format=gbrp16le,lutrgb=r='{curve}':g='{curve}':b='{curve}'," +
+                   "zscale=tin=linear:pin=bt2020:p=bt709:t=iec61966-2-1:m=bt709:r=tv,format=yuv420p";
+        }
+
+        /// <summary>
+        /// Builds the thumbnail -vf chain. HDR sources get the tone map OBS uses when recording HDR as SDR.
         /// </summary>
         private static string BuildThumbnailVideoFilter(int width, bool isHdr)
         {
             string scale = $"scale={width}:-1";
-            if (!isHdr)
-                return scale;
-
-            return "zscale=t=linear:npl=100,format=gbrpf32le,zscale=p=bt709," +
-                   "tonemap=tonemap=hable,zscale=t=bt709:m=bt709:r=tv,format=yuv420p," + scale;
+            return isHdr ? $"{BuildHdrToSdrFilter()},{scale}" : scale;
         }
 
         private static readonly Regex _streamHeaderRegex = new(
@@ -692,7 +796,7 @@ namespace Segra.Backend.Media
         /// <summary>
         /// Generates a thumbnail from a video at the midpoint, falling back to other positions when the frame is black
         /// </summary>
-        public static async Task CreateThumbnailFile(string inputFilePath, string outputFilePath, int width = 720, int quality = 9)
+        public static async Task CreateThumbnailFile(string inputFilePath, string outputFilePath, int width = 960, int quality = 6)
         {
             TimeSpan duration = await GetVideoDuration(inputFilePath);
 
@@ -734,10 +838,9 @@ namespace Segra.Backend.Media
         }
 
         /// <summary>
-        /// Extracts audio as PCM data for waveform generation. When the input has
-        /// multiple audio streams, mixes them all together via amix so the waveform
-        /// represents every audio device, not just whichever stream ffmpeg picks
-        /// by default.
+        /// Extracts audio as PCM data for waveform generation. When audioStreamCount
+        /// is above 1, mixes that many streams together via amix so the waveform
+        /// represents every audio device. Otherwise only the first audio stream is decoded.
         /// </summary>
         public static async Task ExtractPcmAudio(string inputFilePath, string outputPcmPath, int sampleRate = 11025, int audioStreamCount = 1)
         {
@@ -754,6 +857,11 @@ namespace Segra.Backend.Media
                 args.Add($"{inputs}amix=inputs={audioStreamCount}:normalize=0[aout]");
                 args.Add("-map");
                 args.Add("[aout]");
+            }
+            else
+            {
+                args.Add("-map");
+                args.Add("0:a:0");
             }
 
             args.AddRange(new[]

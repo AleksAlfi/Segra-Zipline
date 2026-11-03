@@ -66,6 +66,12 @@ const GAME_INTEGRATIONS: GameIntegration[] = [
     betaNote: 'Kills and assists only work with color\u00a0blind mode off.',
   },
   {
+    id: 'the-finals',
+    name: 'THE FINALS',
+    settingsKey: 'theFinals',
+    backgroundImage: 'https://segra.tv/api/games/cover/cod6ev',
+  },
+  {
     id: 'gta',
     name: 'Grand Theft Auto',
     settingsKey: 'gta',
@@ -118,7 +124,7 @@ const GAME_INTEGRATIONS: GameIntegration[] = [
     id: 'deadlock',
     name: 'Deadlock',
     settingsKey: 'deadlock',
-    backgroundImage: 'https://segra.tv/api/games/cover/cobc7s',
+    backgroundImage: 'https://segra.tv/api/games/cover/scuhl8',
   },
   {
     id: 'dota2',
@@ -139,6 +145,7 @@ const GAME_INTEGRATIONS: GameIntegration[] = [
     backgroundImage: 'https://segra.tv/api/games/cover/ar3en0',
   },
 ];
+GAME_INTEGRATIONS.sort((a, b) => a.name.localeCompare(b.name));
 
 interface GameIntegrationCardProps {
   integration: GameIntegration;
@@ -172,7 +179,7 @@ function GameIntegrationCard({
       )}
       {integration.betaNote && (
         <span
-          className="tooltip tooltip-left tooltip-primary absolute top-1.5 right-2.5 z-20 text-[10px] font-semibold text-primary drop-shadow-md [&::before]:delay-200 [&::after]:delay-200 [&::before]:text-left [&::before]:leading-snug [&::before]:max-w-64 [&::before]:px-3 [&::before]:py-2"
+          className="tooltip tooltip-bottom tooltip-primary absolute top-1.5 right-2.5 z-20 text-[10px] font-semibold text-primary drop-shadow-md [&::before]:delay-200 [&::after]:delay-200 [&::before]:text-left [&::before]:leading-snug [&::before]:max-w-52 [&::before]:[--tt-trans:calc(-100%+1rem)] [&::before]:px-3 [&::before]:py-2"
           data-tip={integration.betaNote}
         >
           Beta
@@ -244,7 +251,7 @@ export default function GameIntegrationsSection() {
             key={integration.id}
             integration={integration}
             enabled={settings.gameIntegrations[integration.settingsKey].enabled}
-            showBackground={settings.showGameBackground}
+            showBackground={settings.showGameBackground && !settings.airplaneMode}
             onToggle={(enabled) => handleToggle(integration.settingsKey, enabled)}
           />
         ))}

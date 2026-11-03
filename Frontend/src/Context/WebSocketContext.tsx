@@ -1,11 +1,10 @@
-import { createContext, useContext, ReactNode, useCallback, useRef } from 'react';
-import useWebSocket, { ReadyState } from 'react-use-websocket';
+import { createContext, useContext, ReactNode, useCallback, useEffect, useState } from 'react';
 import { sendMessageToBackend } from '../Utils/MessageUtils';
 
 interface WebSocketContextType {
   sendMessage: (message: string) => void;
   isConnected: boolean;
-  connectionState: ReadyState;
+  connectionState: number;
 }
 
 const WebSocketContext = createContext<WebSocketContextType | undefined>(undefined);
@@ -15,71 +14,98 @@ interface WebSocketMessage {
   content: any;
 }
 
+const SOCKET_URL = 'ws://localhost:44030/';
+const RECONNECT_INTERVAL_MS = 3000;
+
+// The heartbeat closes the socket if no message arrives within the timeout, and otherwise
+// sends 'ping' every interval. While the Segra window is backgrounded during gameplay,
+// Chromium/WebView2 throttles timers to fire at most about once every 60 seconds. The
+// interval must stay below that floor so each throttled tick still emits a ping (which the
+// backend answers, resetting the timeout), and the timeout must stay well above it so one
+// slow tick can't trip the close.
+const HEARTBEAT_INTERVAL_MS = 30000;
+const HEARTBEAT_TIMEOUT_MS = 120000;
+
+// The socket opens when this module loads, before the first render, so the backend's first
+// pushes overlap it. Messages are held until the providers below have subscribed.
+let socket: WebSocket;
+let lastMessageAt = 0;
+let subscribed = false;
+const heldMessages: WebSocketMessage[] = [];
+const stateListeners = new Set<(state: number) => void>();
+
+function dispatchMessage(data: WebSocketMessage) {
+  window.dispatchEvent(new CustomEvent('websocket-message', { detail: data }));
+}
+
+function connect() {
+  const ws = new WebSocket(SOCKET_URL);
+  socket = ws;
+  stateListeners.forEach((listener) => listener(ws.readyState));
+
+  ws.onopen = () => {
+    console.log('WebSocket connected');
+    lastMessageAt = Date.now();
+    // The backend replies with settings, state and the current AuthState
+    sendMessageToBackend('NewConnection');
+    stateListeners.forEach((listener) => listener(ws.readyState));
+  };
+  ws.onmessage = (event) => {
+    lastMessageAt = Date.now();
+    try {
+      const data: WebSocketMessage = JSON.parse(event.data);
+      if (data.method !== 'RecordingPreviewFrame') {
+        console.log('WebSocket message received:', data);
+      }
+      if (subscribed) dispatchMessage(data);
+      else heldMessages.push(data);
+    } catch (error) {
+      console.error('Failed to parse WebSocket message:', error);
+    }
+  };
+  ws.onerror = (event) => {
+    console.error('WebSocket error:', event);
+  };
+  ws.onclose = (event) => {
+    console.warn('WebSocket closed, will attempt to reconnect:', event.code, event.reason);
+    stateListeners.forEach((listener) => listener(ws.readyState));
+    setTimeout(connect, RECONNECT_INTERVAL_MS);
+  };
+}
+
+connect();
+
+setInterval(() => {
+  if (socket.readyState !== WebSocket.OPEN) return;
+  if (Date.now() - lastMessageAt > HEARTBEAT_TIMEOUT_MS) {
+    socket.close();
+    return;
+  }
+  socket.send('ping');
+}, HEARTBEAT_INTERVAL_MS);
+
 export function WebSocketProvider({ children }: { children: ReactNode }) {
-  // Ref to track if this is a reconnection (not initial connection)
-  const hasConnectedBefore = useRef(false);
+  const [readyState, setReadyState] = useState<number>(socket.readyState);
 
-  // Configure WebSocket with reconnection and heartbeat
-  const { readyState } = useWebSocket('ws://localhost:44030/', {
-    onOpen: () => {
-      // Check if this is a reconnection
-      if (hasConnectedBefore.current) {
-        console.log('WebSocket reconnected after disconnect - resyncing state');
-      } else {
-        console.log('WebSocket connected for the first time');
-        hasConnectedBefore.current = true;
-      }
+  useEffect(() => {
+    stateListeners.add(setReadyState);
+    setReadyState(socket.readyState);
 
-      // The backend replies with settings, state and the current AuthState
-      sendMessageToBackend('NewConnection');
-    },
-    onClose: (event) => {
-      console.warn('WebSocket closed:', event.code, event.reason);
-    },
-    onError: (event) => {
-      console.error('WebSocket error:', event);
-    },
-    onMessage: (event) => {
-      try {
-        const data: WebSocketMessage = JSON.parse(event.data);
-        if (data.method !== 'RecordingPreviewFrame') {
-          console.log('WebSocket message received:', data);
-        }
+    // Effects run children first, so every provider below has subscribed by now
+    subscribed = true;
+    heldMessages.splice(0).forEach(dispatchMessage);
 
-        // Dispatch the message to all listeners
-        window.dispatchEvent(
-          new CustomEvent('websocket-message', {
-            detail: data,
-          }),
-        );
-      } catch (error) {
-        console.error('Failed to parse WebSocket message:', error);
-      }
-    },
-    shouldReconnect: () => {
-      console.log('WebSocket closed, will attempt to reconnect');
-      return true;
-    },
-    reconnectAttempts: Infinity,
-    reconnectInterval: 3000,
-    // The heartbeat closes the socket if no message arrives within `timeout`, and otherwise
-    // sends `message` every `interval`. Both run off a single setInterval. While the Segra
-    // window is backgrounded during gameplay, Chromium/WebView2 throttles timers to fire at
-    // most about once every 60 seconds. `interval` must stay below that floor so each throttled
-    // tick still emits a ping (which the backend answers, resetting the timeout), and `timeout`
-    // must stay well above it so one slow tick can't trip the close.
-    heartbeat: {
-      message: 'ping',
-      timeout: 120000,
-      interval: 30000,
-    },
-  });
+    return () => {
+      subscribed = false;
+      stateListeners.delete(setReadyState);
+    };
+  }, []);
 
   const contextValue = {
     sendMessage: useCallback((message: string) => {
       sendMessageToBackend(message);
     }, []),
-    isConnected: readyState === ReadyState.OPEN,
+    isConnected: readyState === WebSocket.OPEN,
     connectionState: readyState,
   };
 

@@ -13,9 +13,6 @@ namespace Segra.Backend.Windows.Display
         [DllImport("user32.dll", SetLastError = true)]
         private static extern bool GetClientRect(IntPtr hWnd, out RECT lpRect);
 
-        [DllImport("user32.dll", SetLastError = true)]
-        private static extern uint GetDpiForWindow(IntPtr hWnd);
-
         [DllImport("user32.dll", CharSet = CharSet.Auto)]
         private static extern bool EnumWindows(EnumWindowsProc lpEnumFunc, IntPtr lParam);
 
@@ -103,7 +100,7 @@ namespace Segra.Backend.Windows.Display
             return false;
         }
 
-        public static bool GetWindowDimensionsByPreRecordingExeOrPid(out uint width, out uint height)
+        public static bool GetWindowDimensionsByPreRecordingExeOrPid(out uint width, out uint height, CancellationToken cancel)
         {
             width = 0;
             height = 0;
@@ -122,6 +119,9 @@ namespace Segra.Backend.Windows.Display
 
             for (int attempt = 1; attempt <= maxAttempts; attempt++)
             {
+                if (cancel.IsCancellationRequested)
+                    return false;
+
                 PreRecording? preRecording = AppState.Instance.PreRecording;
 
                 if (preRecording == null)
@@ -148,12 +148,12 @@ namespace Segra.Backend.Windows.Display
                 if (targetWindow != IntPtr.Zero)
                 {
                     TrackPreRecordingWindowPid(targetWindow);
-                    return GetWindowDimensionsByWindowHandle(targetWindow, executableFileName, attempt, out width, out height);
+                    return GetWindowDimensionsByWindowHandle(targetWindow, executableFileName, attempt, cancel, out width, out height);
                 }
 
                 if (attempt < maxAttempts)
                 {
-                    Thread.Sleep(delayMs);
+                    cancel.WaitHandle.WaitOne(delayMs);
                 }
             }
 
@@ -182,9 +182,9 @@ namespace Segra.Backend.Windows.Display
         /// hands off to the real game exe mid-wait, and the wait stops early if the pending recording
         /// is cancelled (e.g. the game closes during launch).
         /// </summary>
-        public static IntPtr TryGetPreRecordingWindowHandle(int maxAttempts = 3, int delayMs = 100)
+        public static IntPtr TryGetPreRecordingWindowHandle(int maxAttempts = 3, int delayMs = 100, CancellationToken cancel = default)
         {
-            for (int attempt = 1; attempt <= maxAttempts; attempt++)
+            for (int attempt = 1; attempt <= maxAttempts && !cancel.IsCancellationRequested; attempt++)
             {
                 string? exe = AppState.Instance.PreRecording?.Exe;
                 if (string.IsNullOrEmpty(exe))
@@ -194,7 +194,7 @@ namespace Segra.Backend.Windows.Display
                 if (hwnd != IntPtr.Zero)
                     return hwnd;
                 if (attempt < maxAttempts)
-                    Thread.Sleep(delayMs);
+                    cancel.WaitHandle.WaitOne(delayMs);
             }
             return IntPtr.Zero;
         }
@@ -463,6 +463,15 @@ namespace Segra.Backend.Windows.Display
                 return false;
             }
 
+            // Must not be a console window, which reports the attached process as its owner
+            StringBuilder className = new(256);
+            GetClassName(hWnd, className, className.Capacity);
+            if (className.ToString() == "ConsoleWindowClass")
+            {
+                if (logReason) Log.Information($"  Rejected: console window");
+                return false;
+            }
+
             return true;
         }
 
@@ -528,7 +537,7 @@ namespace Segra.Backend.Windows.Display
             return false;
         }
 
-        private static bool GetWindowDimensionsByWindowHandle(IntPtr windowHandle, string? executableFileName, int windowHandleAttempts, out uint width, out uint height)
+        private static bool GetWindowDimensionsByWindowHandle(IntPtr windowHandle, string? executableFileName, int windowHandleAttempts, CancellationToken cancel, out uint width, out uint height)
         {
             width = 0;
             height = 0;
@@ -546,6 +555,9 @@ namespace Segra.Backend.Windows.Display
 
             while (stableWindowDimensionsAttempt < maxStableWindowDimensionsAttempts)
             {
+                if (cancel.IsCancellationRequested)
+                    return false;
+
                 stableWindowDimensionsAttempt += 1;
 
                 // A launcher (e.g. BattlEye) can hand off to the real game exe mid-wait,
@@ -586,7 +598,7 @@ namespace Segra.Backend.Windows.Display
                     windowHandle = TryFindWindow(executableFileName, stableWindowDimensionsAttempt);
                     if (windowHandle == IntPtr.Zero)
                     {
-                        Thread.Sleep(1000);
+                        cancel.WaitHandle.WaitOne(1000);
                         continue;
                     }
                     TrackPreRecordingWindowPid(windowHandle);
@@ -609,51 +621,20 @@ namespace Segra.Backend.Windows.Display
                         Log.Warning($"Failed to find window for executable {executableFileName} after {maxStableWindowDimensionsAttempts} attempts");
                         return false;
                     }
-                    Thread.Sleep(1000);
+                    cancel.WaitHandle.WaitOne(1000);
                     continue;
                 }
 
-                // Get logical dimensions from client rect
-                int logicalWidth = rect.Width;
-                int logicalHeight = rect.Height;
-
-                // Get DPI for this specific window and convert to physical pixels
-                try
-                {
-                    uint dpi = GetDpiForWindow(windowHandle);
-                    if (dpi > 0)
-                    {
-                        double scale = dpi / 96.0;
-                        width = (uint)Math.Round(logicalWidth * scale);
-                        height = (uint)Math.Round(logicalHeight * scale);
-                    }
-                    else
-                    {
-                        // Fallback to logical dimensions if DPI is 0
-                        width = (uint)logicalWidth;
-                        height = (uint)logicalHeight;
-                    }
-                }
-                catch
-                {
-                    // Fallback to logical dimensions on error
-                    width = (uint)logicalWidth;
-                    height = (uint)logicalHeight;
-                }
+                // Segra is per-monitor DPI aware, so this is already the window's size in physical pixels
+                width = (uint)rect.Width;
+                height = (uint)rect.Height;
 
                 // Check if dimensions match a display (fullscreen) - needs fewer stability checks.
                 // Allow a small pixel tolerance so off-by-one dimensions (e.g. 2560x1441 vs 2560x1440) still count.
-                // The logical comparison catches apps whose per-window DPI inflates the physical-pixel dims
-                // away from the monitor's physical resolution even when the game renders edge-to-edge.
                 SettingsService.GetPrimaryMonitorResolution(out uint monitorWidth, out uint monitorHeight);
                 const int fullscreenTolerance = 4;
-                var monitorBounds = Screen.PrimaryScreen?.Bounds;
-                bool isFullscreen =
-                    (Math.Abs((int)width - (int)monitorWidth) <= fullscreenTolerance
-                        && Math.Abs((int)height - (int)monitorHeight) <= fullscreenTolerance)
-                    || (monitorBounds.HasValue
-                        && Math.Abs(logicalWidth - monitorBounds.Value.Width) <= fullscreenTolerance
-                        && Math.Abs(logicalHeight - monitorBounds.Value.Height) <= fullscreenTolerance);
+                bool isFullscreen = Math.Abs((int)width - (int)monitorWidth) <= fullscreenTolerance
+                    && Math.Abs((int)height - (int)monitorHeight) <= fullscreenTolerance;
 
                 // Skip waiting on a standard aspect ratio unless the process just started (splash screen risk).
                 bool isStandardAspectRatio = IsStandardAspectRatio(width, height);
@@ -680,7 +661,7 @@ namespace Segra.Backend.Windows.Display
                             }
 
                             Log.Information($"Window dimensions stable at {width}x{height}, check {stabilityChecks}/{requiredStabilityChecks}");
-                            Thread.Sleep(1000);
+                            cancel.WaitHandle.WaitOne(1000);
                         }
                         else
                         {
@@ -697,7 +678,7 @@ namespace Segra.Backend.Windows.Display
                                 : isStandardAspectRatio ? standardRatioChecks : 30;
                             stabilityChecks = 0;
 
-                            Thread.Sleep(1000);
+                            cancel.WaitHandle.WaitOne(1000);
                         }
                     }
                     else
@@ -717,7 +698,7 @@ namespace Segra.Backend.Windows.Display
 
                         lastWidth = width;
                         lastHeight = height;
-                        Thread.Sleep(1000);
+                        cancel.WaitHandle.WaitOne(1000);
                     }
                 }
                 else
@@ -726,7 +707,7 @@ namespace Segra.Backend.Windows.Display
                     {
                         Log.Information($"Window dimensions are {width}x{height}, waiting for valid size...");
                     }
-                    Thread.Sleep(1000);
+                    cancel.WaitHandle.WaitOne(1000);
                 }
             }
 

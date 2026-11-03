@@ -17,6 +17,7 @@ namespace Segra.Backend.Core.Models
         private PreRecording? _preRecording = null;
         private Recording? _recording = null;
         private bool _alwaysOnBufferActive = false;
+        private int _finishingRecordings = 0;
         private bool _hasLoadedObs = false;
         private List<Content> _content = [];
 
@@ -66,6 +67,9 @@ namespace Segra.Backend.Core.Models
             }
         }
 
+        [JsonPropertyName("integratedGpuVendors")]
+        public List<string> IntegratedGpuVendors => GetIntegratedGpuVendors();
+
         [JsonPropertyName("preRecording")]
         public PreRecording? PreRecording
         {
@@ -106,6 +110,21 @@ namespace Segra.Backend.Core.Models
                     SendToFrontend("State update: AlwaysOnBufferActive");
                 }
             }
+        }
+
+        [JsonPropertyName("isFinishingRecording")]
+        public bool IsFinishingRecording => Volatile.Read(ref _finishingRecordings) > 0;
+
+        public void BeginFinishingRecording()
+        {
+            Interlocked.Increment(ref _finishingRecordings);
+            SendToFrontend("State update: IsFinishingRecording");
+        }
+
+        public void EndFinishingRecording()
+        {
+            Interlocked.Decrement(ref _finishingRecordings);
+            SendToFrontend("State update: IsFinishingRecording");
         }
 
         [JsonPropertyName("hasLoadedObs")]
