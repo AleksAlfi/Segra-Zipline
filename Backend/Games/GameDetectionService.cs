@@ -10,7 +10,6 @@ using System.Text.RegularExpressions;
 using System.Xml.Linq;
 #if WINDOWS
 using System.Security;
-using System.Management;
 #endif
 
 namespace Segra.Backend.Games
@@ -18,26 +17,20 @@ namespace Segra.Backend.Games
     public static class GameDetectionService
     {
         public static bool PreventRetryRecording { get; set; } = false;
-        // After a manual stop, the game getting focus (its window opening, or tabbing back in) shouldn't restart it right away
-        private const int UserStopCooldownMs = 15000;
-        private static long _autoStartAllowedAt;
-        private static bool InUserStopCooldown => Environment.TickCount64 < Interlocked.Read(ref _autoStartAllowedAt);
-#if WINDOWS
-        private static ManagementEventWatcher? processStartWatcher;
-        private static ManagementEventWatcher? processStopWatcher;
-#endif
         private static readonly Dictionary<string, string> deviceToDrive = new();
         private static bool _running;
         private static System.Threading.Timer? _processCheckTimer;
-#if !WINDOWS
-        // Snapshot of PIDs seen on the previous /proc scan, to synthesize start/stop events.
+        // Snapshot of PIDs seen on the previous process scan, to synthesize start/stop events.
         private static HashSet<int> _knownPids = new();
         private static System.Threading.Timer? _procPollTimer;
         private static int _pollInProgress;
+#if !WINDOWS
         // Steam/Proton install dir of the game being recorded. Proton runs the game's Windows .exe under
         // Wine, so its Linux PIDs are volatile; every process in the session shares this path, so we track
         // it to detect when the game closes (instead of a single PID that may exit mid-session).
         private static string? _recordingSteamInstallPath;
+        // Proton game whose start failed; not retried until it closes
+        private static string? _failedSteamInstallPath;
         // First sighting of pids that still showed the Wine loader; Wine renames a process to its exe shortly after exec
         private static readonly Dictionary<int, DateTime> _wineStarting = new();
 #endif
@@ -114,40 +107,71 @@ namespace Segra.Backend.Games
         }
 
 #if WINDOWS
+        [DllImport("psapi.dll", SetLastError = true)]
+        private static extern bool EnumProcesses([Out] int[] processIds, int size, out int bytesReturned);
+
+        private static int[] _pidBuffer = new int[1024];
+
         private static void Start()
         {
             Log.Information("Starting process monitoring...");
             InitializeDriveMappings();
 
-            processStartWatcher = new ManagementEventWatcher(new WqlEventQuery("SELECT * FROM __InstanceCreationEvent WITHIN 1 WHERE TargetInstance isa \"Win32_Process\""));
-            processStartWatcher.EventArrived += OnProcessStarted;
-            processStartWatcher.Start();
-
-            processStopWatcher = new ManagementEventWatcher(new WqlEventQuery("SELECT * FROM __InstanceDeletionEvent WITHIN 1 WHERE TargetInstance isa \"Win32_Process\""));
-            processStopWatcher.EventArrived += OnProcessStopped;
-            processStopWatcher.Start();
+            // Polled here because WMI process events make the WMI service enumerate every process each second
+            _knownPids = EnumerateProcessIds();
+            _procPollTimer = new System.Threading.Timer(_ => PollProcesses(), null, 1000, 1000);
 
             // Start periodic process scanning for games that might not trigger foreground events
             _processCheckTimer = new System.Threading.Timer(_ => CheckForGames(), null, 10000, 10000);
 
-            Log.Information("WMI watchers and process check timer are now active.");
+            Log.Information("Process poll timer and process check timer are now active.");
         }
 
-        private static void OnProcessStarted(object sender, EventArrivedEventArgs e)
+        private static void PollProcesses()
         {
+            if (Interlocked.Exchange(ref _pollInProgress, 1) == 1) return;
             try
             {
-                var processObj = e.NewEvent["TargetInstance"] as ManagementBaseObject;
-                if (processObj == null) return;
+                var current = EnumerateProcessIds();
+                // A failed snapshot must not look like every process exited
+                if (current.Count == 0) return;
 
-                int pid = Convert.ToInt32(processObj["Handle"]);
-                string exePath = ResolveProcessPath(pid);
+                foreach (int pid in current)
+                {
+                    if (!_knownPids.Contains(pid))
+                        HandleProcessStarted(pid, ResolveProcessPath(pid));
+                }
 
-                HandleProcessStarted(pid, exePath);
+                foreach (int pid in _knownPids)
+                {
+                    if (!current.Contains(pid))
+                        HandleProcessStopped(pid);
+                }
+
+                _knownPids = current;
             }
             catch (Exception ex)
             {
-                Log.Error(ex, "[OnProcessStarted] Exception");
+                Log.Error($"[PollProcesses] Exception: {ex.Message}");
+            }
+            finally
+            {
+                Interlocked.Exchange(ref _pollInProgress, 0);
+            }
+        }
+
+        private static HashSet<int> EnumerateProcessIds()
+        {
+            while (true)
+            {
+                if (!EnumProcesses(_pidBuffer, _pidBuffer.Length * sizeof(int), out int bytes))
+                    return [];
+
+                // A full buffer may have cut the list short
+                if (bytes < _pidBuffer.Length * sizeof(int))
+                    return new HashSet<int>(new ArraySegment<int>(_pidBuffer, 0, bytes / sizeof(int)));
+
+                _pidBuffer = new int[_pidBuffer.Length * 2];
             }
         }
 #else
@@ -203,6 +227,9 @@ namespace Segra.Backend.Games
                 current.ExceptWith(wineStarting);
                 foreach (int pid in _wineStarting.Keys.Except(wineStarting).ToList())
                     _wineStarting.Remove(pid);
+
+                if (_failedSteamInstallPath != null && !AnyProcessHasSteamInstall(current, _failedSteamInstallPath))
+                    _failedSteamInstallPath = null;
 
                 if (AppState.Instance.Recording == null && AppState.Instance.PreRecording == null)
                 {
@@ -358,11 +385,14 @@ namespace Segra.Backend.Games
             if (string.IsNullOrEmpty(install) || !Directory.Exists(install)) return null;
             try
             {
+                string[] blockedTexts = GameUtils.GetBlacklistedPathTexts();
                 string? biggest = null; long biggestLen = -1;
                 foreach (var exe in Directory.EnumerateFiles(install, "*.exe", SearchOption.AllDirectories))
                 {
                     string norm = PathUtils.Normalize(exe);
                     if (GameUtils.IsGameExePath(norm)) return norm; // catalog hit wins immediately
+                    string relative = Path.GetRelativePath(install, exe);
+                    if (blockedTexts.Any(t => relative.Contains(t, StringComparison.OrdinalIgnoreCase))) continue;
                     long len = new FileInfo(exe).Length;
                     if (len > biggestLen) { biggestLen = len; biggest = norm; }
                 }
@@ -383,7 +413,7 @@ namespace Segra.Backend.Games
         }
 
         // True while any live process still belongs to the given game's Proton session (they all carry
-        // STEAM_COMPAT_INSTALL_PATH). Only reached while recording a Proton game, so scanning environ is fine.
+        // STEAM_COMPAT_INSTALL_PATH). Only reached while recording or blocking a Proton game, so scanning environ is fine.
         private static bool AnyProcessHasSteamInstall(HashSet<int> pids, string installDir)
         {
             if (Platform.Linux.FlatpakHost.IsFlatpak)
@@ -392,20 +422,20 @@ namespace Segra.Backend.Games
                 var installPaths = Platform.Linux.FlatpakHost.ReadEnvVarValues("STEAM_COMPAT_INSTALL_PATH");
                 // A failed read must not look like the game exited.
                 if (installPaths == null) return true;
-                return installPaths.Any(p => PathUtils.Normalize(p).Equals(installDir, StringComparison.OrdinalIgnoreCase));
+                return installPaths.Any(p => PathUtils.Normalize(p).TrimEnd('/').Equals(installDir, StringComparison.OrdinalIgnoreCase));
             }
 
             foreach (int pid in pids)
             {
                 string? p = ReadProcEnvVar(pid, "STEAM_COMPAT_INSTALL_PATH");
-                if (p != null && PathUtils.Normalize(p).Equals(installDir, StringComparison.OrdinalIgnoreCase))
+                if (p != null && PathUtils.Normalize(p).TrimEnd('/').Equals(installDir, StringComparison.OrdinalIgnoreCase))
                     return true;
             }
             return false;
         }
 #endif
 
-        // Shared start-of-process handling, called from the WMI watcher (Windows) or /proc poll (Linux).
+        // Shared start-of-process handling, called from the process poll (Windows) or /proc poll (Linux).
         private static void HandleProcessStarted(int pid, string exePath)
         {
             try
@@ -436,16 +466,12 @@ namespace Segra.Backend.Games
         }
 
 #if WINDOWS
-        private static void OnProcessStopped(object sender, EventArrivedEventArgs e)
+        private static void HandleProcessStopped(int pid)
         {
             if (AppState.Instance.Recording == null && AppState.Instance.PreRecording == null) return;
 
             try
             {
-                var processObj = e.NewEvent["TargetInstance"] as ManagementBaseObject;
-                if (processObj == null) return;
-
-                int pid = Convert.ToInt32(processObj["Handle"]);
                 string exePath = ResolveProcessPath(pid);
 
                 if (IsIrrelevantProcessPath(exePath)) return;
@@ -483,11 +509,11 @@ namespace Segra.Backend.Games
                 return;
             }
 
-            if (InUserStopCooldown)
-            {
-                Log.Information("[StartGameRecording] Recording was just stopped manually. Skipping...");
+#if !WINDOWS
+            string? steamInstallPath = SteamInstallDirFromExe(exePath);
+            if (steamInstallPath != null && string.Equals(steamInstallPath, _failedSteamInstallPath, StringComparison.OrdinalIgnoreCase))
                 return;
-            }
+#endif
 
             Log.Information($"[StartGameRecording] Starting recording for game: PID {pid}, Path: {exePath}");
 
@@ -498,14 +524,10 @@ namespace Segra.Backend.Games
 #if WINDOWS
             _ = Task.Run(() => OBSService.StartRecording(gameName, exePath, pid: pid));
 #else
-            OBSService.StartRecording(gameName, exePath, pid: pid);
+            PreventRetryRecording = false;
+            if (!OBSService.StartRecording(gameName, exePath, pid: pid) && PreventRetryRecording)
+                _failedSteamInstallPath = steamInstallPath;
 #endif
-        }
-
-        public static void OnUserStop()
-        {
-            Interlocked.Exchange(ref _autoStartAllowedAt, Environment.TickCount64 + UserStopCooldownMs);
-            PreventRetryRecording = true;
         }
 
 #if WINDOWS
@@ -1316,22 +1338,20 @@ namespace Segra.Backend.Games
             {
                 if (eventType == EVENT_SYSTEM_FOREGROUND)
                 {
-                    // Reset retry recording flag to allow retrying recording if the user has changed foreground window,
-                    // unless it happened during the cooldown after a manual stop
-                    PreventRetryRecording = InUserStopCooldown;
+                    // Reset retry recording flag to allow retrying recording if the user has changed foreground window
+                    PreventRetryRecording = false;
+                    _ = GetWindowThreadProcessId(hwnd, out uint pid);
 
                     if (AppState.Instance.Recording is { } recording)
                     {
-                        _ = GetWindowThreadProcessId(hwnd, out uint focusedPid);
-                        if (recording.Pid == (int)focusedPid)
+                        _lastLoggedHwnd = IntPtr.Zero;
+                        if (recording.Pid == (int)pid)
                             OBSService.OnGameFocused(hwnd);
                         return;
                     }
 
                     // The foreground hook can fire repeatedly for the same window; skip if it matches what we last logged
                     if (hwnd == _lastLoggedHwnd) return;
-
-                    _ = GetWindowThreadProcessId(hwnd, out uint pid);
 
                     if (pid <= 0)
                     {
@@ -1348,7 +1368,10 @@ namespace Segra.Backend.Games
                         // foreground constantly, and are never recorded, so skip them to avoid log spam
                         if (string.Equals(Path.GetFileName(exePath), "explorer.exe", StringComparison.OrdinalIgnoreCase)
                             || exePath.StartsWith("C:/Windows/SystemApps/", StringComparison.OrdinalIgnoreCase))
+                        {
+                            _lastLoggedHwnd = hwnd;
                             return;
+                        }
 
                         string fileDescription = GetFileDescription(exePath);
 

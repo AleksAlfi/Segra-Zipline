@@ -51,7 +51,7 @@ namespace Segra.Backend.Windows.Input
 #if WINDOWS && !DEBUG && !LOCAL_BUILD
             var client = new HotkeyBrokerClient();
             client.StateChanged += OnBrokerStateChanged;
-            client.ActionFired += HandleHotkeyAction;
+            client.ActionFired += HandleBindingFired;
             lock (_lock)
                 _brokerClient = client;
             client.Start();
@@ -62,7 +62,7 @@ namespace Segra.Backend.Windows.Input
             if (!string.IsNullOrEmpty(Environment.GetEnvironmentVariable("WAYLAND_DISPLAY")))
             {
                 // XWayland only sees keys while an X11 window has focus, so it is the fallback
-                Platform.Linux.ILinuxHotkeySource? source = Platform.Linux.EvdevHotkeyPoller.TryStart(HandleHotkeyAction, out bool permissionDenied);
+                Platform.Linux.ILinuxHotkeySource? source = Platform.Linux.EvdevHotkeyPoller.TryStart(HandleBindingFired, out bool permissionDenied);
                 AppState.Instance.HotkeysNeedInputGroup = permissionDenied;
                 if (source == null)
                 {
@@ -70,7 +70,7 @@ namespace Segra.Backend.Windows.Input
                         Log.Warning("No permission to read keyboards in /dev/input, so hotkeys only work while an X11 window (e.g. a Wine/Proton game) is focused. " +
                             "Add your user to the 'input' group to make them work everywhere: sudo usermod -aG input $USER, then log out and back in");
 
-                    source = Platform.Linux.XWaylandHotkeyPoller.TryStart(HandleHotkeyAction);
+                    source = Platform.Linux.XWaylandHotkeyPoller.TryStart(HandleBindingFired);
                     if (source != null)
                         Log.Information("Reading hotkeys from XWayland");
                     else
@@ -115,7 +115,7 @@ namespace Segra.Backend.Windows.Input
                 return;
 
             client.StateChanged -= OnBrokerStateChanged;
-            client.ActionFired -= HandleHotkeyAction;
+            client.ActionFired -= HandleBindingFired;
             client.Dispose();
 #endif
         }
@@ -138,7 +138,7 @@ namespace Segra.Backend.Windows.Input
             if (client is not null)
             {
                 client.StateChanged -= OnBrokerStateChanged;
-                client.ActionFired -= HandleHotkeyAction;
+                client.ActionFired -= HandleBindingFired;
                 client.Dispose();
             }
 
@@ -321,6 +321,21 @@ namespace Segra.Backend.Windows.Input
             Log.Information(paused ? "Hotkeys paused while a hotkey is being rebound" : "Hotkeys resumed");
         }
 
+        // The broker and the Wayland pollers fire one binding per press, so run every action bound to the same keys
+        private static void HandleBindingFired(HotkeyAction action)
+        {
+            var hotkeys = Settings.Instance.Hotkeys?.Where(k => k.Enabled && k.Keys?.Count > 0).ToList() ?? [];
+            var keys = hotkeys.FirstOrDefault(k => k.Action == action)?.Keys.ToHashSet();
+            if (keys == null)
+            {
+                HandleHotkeyAction(action);
+                return;
+            }
+
+            foreach (var hotkey in hotkeys.Where(k => keys.SetEquals(k.Keys)))
+                HandleHotkeyAction(hotkey.Action);
+        }
+
         private static void HandleHotkeyAction(HotkeyAction action)
         {
             if (DateTime.UtcNow.Ticks < Volatile.Read(ref _pausedUntilTicks))
@@ -353,15 +368,10 @@ namespace Segra.Backend.Windows.Input
                     break;
 
                 case HotkeyAction.SaveReplayBuffer:
-                    if (OBSService.IsAlwaysOnBufferActive || (recording != null && (recordingMode == RecordingMode.Buffer || recordingMode == RecordingMode.Hybrid)))
+                    if (OBSService.CanSaveReplay)
                     {
                         Log.Information("Saving replay buffer...");
-                        // Immediate keypress acknowledgment (sound + shockwave); the separate
-                        // "ReplayBufferSaved" event is sent by SaveReplayBuffer once OBS
-                        // confirms the file is actually written.
-                        _ = MessageService.SendFrontendMessage("ReplayBufferSaveStarted", new { });
-                        Task.Run(OBSService.SaveReplayBuffer);
-                        Task.Run(PlayBookmarkSound);
+                        OBSService.SaveReplayWithFeedback();
                     }
                     break;
 

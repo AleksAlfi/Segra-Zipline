@@ -1,7 +1,6 @@
 using System.Diagnostics;
 using Serilog;
 using NAudio.Wave;
-using NAudio.CoreAudioApi;
 using NAudio.Wave.SampleProviders;
 using Segra.Backend.App;
 using Segra.Backend.Core.Models;
@@ -13,12 +12,13 @@ namespace Segra.Backend.Platform.Windows
 {
     internal sealed class WindowsTrayIcon : ITrayIcon
     {
-        public void Initialize(Action onOpen, Action onResetWindowSize, Action onExit, Func<bool> isWindowOpen)
+        public void Initialize(TrayActions actions)
         {
             var trayThread = new Thread(() =>
             {
                 Application.EnableVisualStyles();
                 Application.SetCompatibleTextRenderingDefault(false);
+                WindowsTrayMenu.EnableDarkMode();
 
                 using var icon = new NotifyIcon
                 {
@@ -27,19 +27,46 @@ namespace Segra.Backend.Platform.Windows
                     Visible = true
                 };
 
-                var menu = new ContextMenuStrip();
-                var openItem = new ToolStripMenuItem("Open", null, (s, e) => onOpen());
-                menu.Items.Add(openItem);
-                menu.Items.Add("Reset window size", null, (s, e) => onResetWindowSize());
-                menu.Items.Add(new ToolStripSeparator());
-                menu.Items.Add("Quit", null, (s, e) => onExit());
-                menu.Opening += (s, e) => openItem.Visible = !isWindowOpen();
-                icon.ContextMenuStrip = menu;
+                // Owns the native tray menu
+                var menuOwner = new NativeWindow();
+                menuOwner.CreateHandle(new CreateParams());
+
+                icon.MouseUp += (s, e) =>
+                {
+                    if (e.Button != MouseButtons.Right)
+                        return;
+
+                    switch (WindowsTrayMenu.Show(menuOwner.Handle, Properties.Resources.icon, actions))
+                    {
+                        case WindowsTrayMenu.Open:
+                            actions.Open();
+                            break;
+                        case WindowsTrayMenu.StartRecording:
+                            actions.StartRecording();
+                            break;
+                        case WindowsTrayMenu.StopRecording:
+                            actions.StopRecording();
+                            break;
+                        case WindowsTrayMenu.SaveReplay:
+                            actions.SaveReplay();
+                            break;
+                        case WindowsTrayMenu.ToggleAutoRecordGames:
+                            actions.ToggleAutoRecordGames();
+                            break;
+                        case WindowsTrayMenu.ResetWindowSize:
+                            actions.ResetWindowSize();
+                            break;
+                        case WindowsTrayMenu.Quit:
+                            icon.Visible = false;
+                            actions.Exit();
+                            break;
+                    }
+                };
 
                 icon.MouseDoubleClick += (s, e) =>
                 {
                     if (e.Button == MouseButtons.Left)
-                        onOpen();
+                        actions.Open();
                 };
 
                 NotifyIconService.Initialize(icon);
@@ -210,8 +237,8 @@ namespace Segra.Backend.Platform.Windows
             var sampleProvider = audioReader.ToSampleProvider();
             var volumeProvider = new VolumeSampleProvider(sampleProvider) { Volume = volume };
 
-            using var waveOut = new WasapiOut(AudioClientShareMode.Shared, 100);
-            waveOut.Init(volumeProvider);
+            using var waveOut = new WasapiPlayerBuilder().WithSharedMode().WithLatency(100).Build();
+            waveOut.Init(volumeProvider.ToWaveProvider());
             waveOut.Play();
 
             while (waveOut.PlaybackState == PlaybackState.Playing)
@@ -228,7 +255,7 @@ namespace Segra.Backend.Platform.Windows
     internal sealed class WindowsAudioStreamPlayer : IAudioStreamPlayer
     {
         private readonly object gate = new();
-        private WasapiOut? waveOut;
+        private WasapiPlayer? waveOut;
         private BufferedWaveProvider? provider;
 
         public void Start(int sampleRate, int channels)
@@ -241,9 +268,8 @@ namespace Segra.Backend.Platform.Windows
                     return;
 
                 provider = new BufferedWaveProvider(
-                    WaveFormat.CreateIeeeFloatWaveFormat(sampleRate, channels))
+                    WaveFormat.CreateIeeeFloatWaveFormat(sampleRate, channels), TimeSpan.FromSeconds(1))
                 {
-                    BufferDuration = TimeSpan.FromSeconds(1),
                     DiscardOnBufferOverflow = true
                 };
 
@@ -251,7 +277,7 @@ namespace Segra.Backend.Platform.Windows
                 var cushion = new byte[sampleRate / 20 * provider.WaveFormat.BlockAlign];
                 provider.AddSamples(cushion, 0, cushion.Length);
 
-                waveOut = new WasapiOut(AudioClientShareMode.Shared, 40);
+                waveOut = new WasapiPlayerBuilder().WithSharedMode().WithLatency(40).Build();
                 try
                 {
                     waveOut.Init(provider);

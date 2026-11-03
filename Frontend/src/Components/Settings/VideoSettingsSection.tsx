@@ -1,10 +1,14 @@
 import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import DropdownSelect from '../DropdownSelect';
-import { Settings as SettingsType, VideoQualityPreset } from '../../Models/types';
+import BitrateInput from './BitrateInput';
+import EncoderVendorIcon, { getEncoderVendor } from '../EncoderVendorIcon';
+import MonitorBrandIcon from '../MonitorBrandIcon';
+import { Settings as SettingsType, VideoQualityPreset, GpuVendor } from '../../Models/types';
 import { sendMessageToBackend } from '../../Utils/MessageUtils';
 import { clampInt } from '../../Utils/NumberUtils';
 import { useAppState } from '../../Context/AppStateContext';
+import HevcExtensionWarning, { isHevcEncoder } from '../HevcExtensionWarning';
 import {
   usePendingRecordingSettings,
   RECORDING_SETTING_GROUPS,
@@ -20,6 +24,13 @@ export default function VideoSettingsSection({
   updateSettings,
 }: VideoSettingsSectionProps) {
   const appState = useAppState();
+  const getSecondaryGpuLabel = (encoderId: string) => {
+    const vendor = getEncoderVendor(encoderId);
+    if (!vendor || appState.gpuVendor === GpuVendor.Unknown || vendor === appState.gpuVendor) {
+      return null;
+    }
+    return appState.integratedGpuVendors?.includes(vendor) ? 'Integrated GPU' : 'Secondary GPU';
+  };
   const hasHdrDisplay = appState.displays.some((d) => d.isHdr);
   const [localReplayBufferDuration, setLocalReplayBufferDuration] = useState<string>(
     String(settings.replayBufferDuration),
@@ -89,7 +100,15 @@ export default function VideoSettingsSection({
             const label = hasDuplicateName
               ? `${d.deviceName} (${i + 1})${d.isPrimary ? ' (Primary)' : ''}`
               : `${d.deviceName}${d.isPrimary ? ' (Primary)' : ''}`;
-            return { value: d.deviceId, label };
+            return {
+              value: d.deviceId,
+              label: (
+                <span className="flex items-center gap-2">
+                  <MonitorBrandIcon display={d} />
+                  {label}
+                </span>
+              ),
+            };
           }),
         ]}
         value={settings.selectedDisplay?.deviceId || 'Automatic'}
@@ -339,13 +358,9 @@ export default function VideoSettingsSection({
                   <label className="label">
                     <span className="label-text text-base-content">Bitrate</span>
                   </label>
-                  <DropdownSelect
-                    items={Array.from({ length: 19 }, (_, i) => (i + 2) * 5).map((v) => ({
-                      value: String(v),
-                      label: `${v} Mbps`,
-                    }))}
-                    value={String(settings.bitrate)}
-                    onChange={(val) => updateSettings({ bitrate: Number(val) })}
+                  <BitrateInput
+                    value={settings.bitrate}
+                    onChange={(bitrate) => updateSettings({ bitrate })}
                   />
                 </div>
               )}
@@ -357,40 +372,28 @@ export default function VideoSettingsSection({
                     <label className="label">
                       <span className="label-text text-base-content">Minimum Bitrate</span>
                     </label>
-                    <DropdownSelect
-                      items={Array.from({ length: 19 }, (_, i) => (i + 2) * 5).map((v) => ({
-                        value: String(v),
-                        label: `${v} Mbps`,
-                      }))}
-                      value={String(settings.minBitrate ?? settings.bitrate)}
-                      onChange={(val) => {
-                        const min = Number(val);
-                        const max = Math.max(min, settings.maxBitrate ?? min);
-                        updateSettings({ minBitrate: min, maxBitrate: max });
-                      }}
+                    <BitrateInput
+                      value={settings.minBitrate}
+                      onChange={(min) =>
+                        updateSettings({
+                          minBitrate: min,
+                          maxBitrate: Math.max(min, settings.maxBitrate),
+                        })
+                      }
                     />
                   </div>
                   <div className="form-control">
                     <label className="label">
                       <span className="label-text text-base-content">Maximum Bitrate</span>
                     </label>
-                    <DropdownSelect
-                      items={Array.from({ length: 19 }, (_, i) => (i + 2) * 5).map((v) => ({
-                        value: String(v),
-                        label: `${v} Mbps`,
-                      }))}
-                      value={String(
-                        settings.maxBitrate ??
-                          Math.max(
-                            settings.minBitrate ?? settings.bitrate,
-                            Math.round((settings.bitrate || 10) * 1.5),
-                          ),
-                      )}
-                      onChange={(val) => {
-                        const max = Number(val);
-                        const min = Math.min(max, settings.minBitrate ?? settings.bitrate);
-                        updateSettings({ maxBitrate: max, minBitrate: min });
-                      }}
+                    <BitrateInput
+                      value={settings.maxBitrate}
+                      onChange={(max) =>
+                        updateSettings({
+                          maxBitrate: max,
+                          minBitrate: Math.min(max, settings.minBitrate),
+                        })
+                      }
                     />
                   </div>
                 </>
@@ -480,18 +483,36 @@ export default function VideoSettingsSection({
                         : !codec.isHardwareEncoder,
                     )
                     .sort((a, b) => {
-                      const priorityOrder = ['jim_nvenc', 'h264_texture_amf', 'obs_x264'];
-                      const aIndex = priorityOrder.indexOf(a.internalEncoderId);
-                      const bIndex = priorityOrder.indexOf(b.internalEncoderId);
-                      if (aIndex !== -1 && bIndex !== -1) return aIndex - bIndex;
-                      if (aIndex !== -1) return -1;
-                      if (bIndex !== -1) return 1;
-                      return 0;
+                      const priorityOrder = ['nvenc', 'amf', 'qsv', 'obs_x264'];
+                      const rank = (id: string) => {
+                        const index = priorityOrder.findIndex((p) => id.includes(p));
+                        return index === -1 ? priorityOrder.length : index;
+                      };
+                      return rank(a.internalEncoderId) - rank(b.internalEncoderId);
                     })
-                    .map((codec) => ({
-                      value: codec.internalEncoderId,
-                      label: codec.friendlyName,
-                    }))}
+                    .map((codec) => {
+                      const secondaryGpuLabel = getSecondaryGpuLabel(codec.internalEncoderId);
+                      return {
+                        value: codec.internalEncoderId,
+                        label: (
+                          <span className="flex items-center gap-2">
+                            <EncoderVendorIcon
+                              encoderId={codec.internalEncoderId}
+                              isHardware={codec.isHardwareEncoder}
+                            />
+                            {codec.friendlyName}
+                            {secondaryGpuLabel && (
+                              <span
+                                className="text-xs font-normal text-base-content/50"
+                                title="Runs on a different GPU than your main one"
+                              >
+                                {secondaryGpuLabel}
+                              </span>
+                            )}
+                          </span>
+                        ),
+                      };
+                    })}
                   value={
                     appState.codecs.find(
                       (c) => c.internalEncoderId === settings.codec?.internalEncoderId,
@@ -514,6 +535,10 @@ export default function VideoSettingsSection({
 
       {settings.videoQualityPreset !== 'custom' && (
         <div className="grid grid-cols-2 gap-4 mt-3">{monitorSelectionField}</div>
+      )}
+
+      {isHevcEncoder(settings.codec?.internalEncoderId) && (
+        <HevcExtensionWarning className="mt-3" />
       )}
 
       <div className="flex flex-col gap-3 mt-3">
@@ -544,11 +569,34 @@ export default function VideoSettingsSection({
             <div>
               <div className="font-semibold">Record in HDR</div>
               <div className="text-sm opacity-70 mt-0.5">
-                Keeps HDR brightness and color. Videos can look washed out on screens without HDR.
+                Keeps HDR brightness and color, but videos can look washed out on screens without
+                HDR. When off, HDR is converted to SDR.
               </div>
             </div>
           </label>
         )}
+
+        {settings.videoQualityPreset === 'custom' &&
+          appState.platform !== 'linux' &&
+          appState.gpuVendor !== GpuVendor.Intel && (
+            <label className="flex items-center gap-3 cursor-pointer p-3 bg-base-200 rounded-lg border border-base-400">
+              <input
+                type="checkbox"
+                checked={settings.gpuPriority === 'Realtime'}
+                onChange={(e) =>
+                  updateSettings({ gpuPriority: e.target.checked ? 'Realtime' : 'High' })
+                }
+                className="checkbox checkbox-primary checkbox-sm"
+              />
+              <div>
+                <div className="font-semibold">Realtime GPU Priority</div>
+                <div className="text-sm opacity-70 mt-0.5">
+                  Keeps recordings smooth in GPU-heavy games. When off, the game gets a few more FPS
+                  but recordings can stutter.
+                </div>
+              </div>
+            </label>
+          )}
       </div>
     </div>
   );

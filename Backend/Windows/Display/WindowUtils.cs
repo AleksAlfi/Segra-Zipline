@@ -13,9 +13,6 @@ namespace Segra.Backend.Windows.Display
         [DllImport("user32.dll", SetLastError = true)]
         private static extern bool GetClientRect(IntPtr hWnd, out RECT lpRect);
 
-        [DllImport("user32.dll", SetLastError = true)]
-        private static extern uint GetDpiForWindow(IntPtr hWnd);
-
         [DllImport("user32.dll", CharSet = CharSet.Auto)]
         private static extern bool EnumWindows(EnumWindowsProc lpEnumFunc, IntPtr lParam);
 
@@ -466,6 +463,15 @@ namespace Segra.Backend.Windows.Display
                 return false;
             }
 
+            // Must not be a console window, which reports the attached process as its owner
+            StringBuilder className = new(256);
+            GetClassName(hWnd, className, className.Capacity);
+            if (className.ToString() == "ConsoleWindowClass")
+            {
+                if (logReason) Log.Information($"  Rejected: console window");
+                return false;
+            }
+
             return true;
         }
 
@@ -619,47 +625,16 @@ namespace Segra.Backend.Windows.Display
                     continue;
                 }
 
-                // Get logical dimensions from client rect
-                int logicalWidth = rect.Width;
-                int logicalHeight = rect.Height;
-
-                // Get DPI for this specific window and convert to physical pixels
-                try
-                {
-                    uint dpi = GetDpiForWindow(windowHandle);
-                    if (dpi > 0)
-                    {
-                        double scale = dpi / 96.0;
-                        width = (uint)Math.Round(logicalWidth * scale);
-                        height = (uint)Math.Round(logicalHeight * scale);
-                    }
-                    else
-                    {
-                        // Fallback to logical dimensions if DPI is 0
-                        width = (uint)logicalWidth;
-                        height = (uint)logicalHeight;
-                    }
-                }
-                catch
-                {
-                    // Fallback to logical dimensions on error
-                    width = (uint)logicalWidth;
-                    height = (uint)logicalHeight;
-                }
+                // Segra is per-monitor DPI aware, so this is already the window's size in physical pixels
+                width = (uint)rect.Width;
+                height = (uint)rect.Height;
 
                 // Check if dimensions match a display (fullscreen) - needs fewer stability checks.
                 // Allow a small pixel tolerance so off-by-one dimensions (e.g. 2560x1441 vs 2560x1440) still count.
-                // The logical comparison catches apps whose per-window DPI inflates the physical-pixel dims
-                // away from the monitor's physical resolution even when the game renders edge-to-edge.
                 SettingsService.GetPrimaryMonitorResolution(out uint monitorWidth, out uint monitorHeight);
                 const int fullscreenTolerance = 4;
-                var monitorBounds = Screen.PrimaryScreen?.Bounds;
-                bool isFullscreen =
-                    (Math.Abs((int)width - (int)monitorWidth) <= fullscreenTolerance
-                        && Math.Abs((int)height - (int)monitorHeight) <= fullscreenTolerance)
-                    || (monitorBounds.HasValue
-                        && Math.Abs(logicalWidth - monitorBounds.Value.Width) <= fullscreenTolerance
-                        && Math.Abs(logicalHeight - monitorBounds.Value.Height) <= fullscreenTolerance);
+                bool isFullscreen = Math.Abs((int)width - (int)monitorWidth) <= fullscreenTolerance
+                    && Math.Abs((int)height - (int)monitorHeight) <= fullscreenTolerance;
 
                 // Skip waiting on a standard aspect ratio unless the process just started (splash screen risk).
                 bool isStandardAspectRatio = IsStandardAspectRatio(width, height);

@@ -46,6 +46,7 @@ namespace Segra.Backend.Core.Models
         private int _frameRate = 60;
         private bool _stretch4By3 = true;
         private bool _enableHdr = true;
+        private GpuPriority _gpuPriority = GpuPriority.Realtime;
         private int _bitrate = 50;
         private int _minBitrate = 35;
         private int _maxBitrate = 70;
@@ -59,6 +60,7 @@ namespace Segra.Backend.Core.Models
         private string? _pipeWireRestoreToken = null; // lets the Wayland screen-share portal skip its picker
         private bool _pendingOBSUpdate = false;
         private int _storageLimit = 100;
+        private bool _unlimitedStorage = false;
         private List<DeviceSetting> _inputDevices = new List<DeviceSetting>();
         private List<DeviceSetting> _outputDevices = new List<DeviceSetting>();
         private Display? _selectedDisplay = null;
@@ -100,6 +102,7 @@ namespace Segra.Backend.Core.Models
         private bool _showNewBadgeOnVideos = false;
         private bool _showGameBackground = true;
         private bool _showAudioWaveformInTimeline = true;
+        private bool _showBookmarksInFullscreen = true;
         private bool _enableSeparateAudioTracks = false;
         private AudioOutputMode _audioOutputMode = AudioOutputMode.All;
         private string _videoQualityPreset = "high";
@@ -183,10 +186,12 @@ namespace Segra.Backend.Core.Models
             set
             {
                 string normalized = Shared.PathUtils.Normalize(value);
-                bool hasChanged = Instance._contentFolder != normalized;
+                bool hasChanged = _contentFolder != normalized;
 
                 _contentFolder = normalized;
-                Instance._contentFolder = normalized;
+
+                // UpdateSettings deserializes a copy; only the instance itself may apply the change
+                if (!ReferenceEquals(this, Instance)) return;
 
                 if (hasChanged || AppState.Instance.Content.Count == 0)
                 {
@@ -250,6 +255,16 @@ namespace Segra.Backend.Core.Models
             set
             {
                 _enableHdr = value;
+            }
+        }
+
+        [JsonPropertyName("gpuPriority")]
+        public GpuPriority GpuPriority
+        {
+            get => _gpuPriority;
+            set
+            {
+                _gpuPriority = value;
             }
         }
 
@@ -342,6 +357,17 @@ namespace Segra.Backend.Core.Models
             set
             {
                 _storageLimit = value;
+            }
+        }
+
+        // Turns off the storage limit cleanup. The low drive space stop while recording still applies.
+        [JsonPropertyName("unlimitedStorage")]
+        public bool UnlimitedStorage
+        {
+            get => _unlimitedStorage;
+            set
+            {
+                _unlimitedStorage = value;
             }
         }
 
@@ -864,6 +890,19 @@ namespace Segra.Backend.Core.Models
             }
         }
 
+        [JsonPropertyName("showBookmarksInFullscreen")]
+        public bool ShowBookmarksInFullscreen
+        {
+            get => _showBookmarksInFullscreen;
+            set
+            {
+                if (_showBookmarksInFullscreen != value)
+                {
+                    _showBookmarksInFullscreen = value;
+                }
+            }
+        }
+
         [JsonPropertyName("enableSeparateAudioTracks")]
         public bool EnableSeparateAudioTracks
         {
@@ -1205,6 +1244,9 @@ namespace Segra.Backend.Core.Models
         [JsonPropertyName("startSettings")]
         public JsonObject? StartSettings { get; set; }
 
+        // Lets saved replays pick up bookmarks that integrations add after the save
+        public event Action<Bookmark>? BookmarkAdded;
+
         public void AddBookmark(Bookmark bookmark)
         {
             lock (_bookmarksLock)
@@ -1212,6 +1254,15 @@ namespace Segra.Backend.Core.Models
                 Bookmarks.Add(bookmark);
             }
             AppState.Instance.NotifyRecordingUpdated();
+            BookmarkAdded?.Invoke(bookmark);
+        }
+
+        public List<Bookmark> GetBookmarks()
+        {
+            lock (_bookmarksLock)
+            {
+                return [.. Bookmarks];
+            }
         }
 
         [JsonPropertyName("duration")]
@@ -1411,7 +1462,7 @@ namespace Segra.Backend.Core.Models
         }
     }
 
-    [JsonConverter(typeof(JsonStringEnumConverter))]
+    [JsonConverter(typeof(JsonStringEnumConverter<RecordingMode>))]
     public enum RecordingMode
     {
         Session,
@@ -1419,21 +1470,28 @@ namespace Segra.Backend.Core.Models
         Hybrid
     }
 
-    [JsonConverter(typeof(JsonStringEnumConverter))]
+    [JsonConverter(typeof(JsonStringEnumConverter<GpuPriority>))]
+    public enum GpuPriority
+    {
+        High,
+        Realtime
+    }
+
+    [JsonConverter(typeof(JsonStringEnumConverter<StartupWindowMode>))]
     public enum StartupWindowMode
     {
         Normal,
         Minimized
     }
 
-    [JsonConverter(typeof(JsonStringEnumConverter))]
+    [JsonConverter(typeof(JsonStringEnumConverter<CloseButtonAction>))]
     public enum CloseButtonAction
     {
         Minimize,
         Exit
     }
 
-    [JsonConverter(typeof(JsonStringEnumConverter))]
+    [JsonConverter(typeof(JsonStringEnumConverter<AudioOutputMode>))]
     public enum AudioOutputMode
     {
         All,
@@ -1649,5 +1707,8 @@ namespace Segra.Backend.Core.Models
 
         [JsonPropertyName("fortnite")]
         public GameIntegrationSettings Fortnite { get; set; } = new GameIntegrationSettings(true);
+
+        [JsonPropertyName("theFinals")]
+        public GameIntegrationSettings TheFinals { get; set; } = new GameIntegrationSettings(true);
     }
 }

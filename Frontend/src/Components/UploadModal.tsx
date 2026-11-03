@@ -67,7 +67,6 @@ export default function UploadModal({ video, onUpload, onClose }: UploadModalPro
             <input
               ref={titleInputRef}
               type="text"
-              tabIndex={1}
               placeholder="Enter a title"
               value={title}
               onChange={(e) => {
@@ -88,7 +87,6 @@ export default function UploadModal({ video, onUpload, onClose }: UploadModalPro
             <label className="label cursor-pointer justify-start gap-2">
               <input
                 type="checkbox"
-                tabIndex={4}
                 className="checkbox checkbox-primary focus:!outline focus:!outline-1 focus:!outline-white focus:!outline-offset-2"
                 checked={clipShowInBrowserAfterUpload}
                 onChange={(e) => updateSettings({ clipShowInBrowserAfterUpload: e.target.checked })}
@@ -106,7 +104,6 @@ export default function UploadModal({ video, onUpload, onClose }: UploadModalPro
         <div className="modal-action mt-6">
           <Button
             variant="primary"
-            tabIndex={5}
             className="w-full focus:!outline focus:!outline-1 focus:!outline-white focus:!outline-offset-2"
             onClick={handleUpload}
             disabled={!isAuthenticated}

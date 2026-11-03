@@ -1,3 +1,5 @@
+import type { HoverIntentHandlers } from '../Hooks/useHoverIntent';
+
 export type ContentType = 'Session' | 'Buffer' | 'Clip' | 'Highlight';
 
 export type RecordingMode = 'Session' | 'Buffer' | 'Hybrid';
@@ -7,6 +9,7 @@ export type AudioTrackType = 'mix' | 'input' | 'output';
 
 export type StartupWindowMode = 'Normal' | 'Minimized';
 export type CloseButtonAction = 'Minimize' | 'Exit';
+export type GpuPriority = 'High' | 'Realtime';
 
 export interface Content {
   id: string;
@@ -45,6 +48,7 @@ export interface HotkeyBrokerStatus {
 
 export interface State {
   gpuVendor: GpuVendor;
+  integratedGpuVendors: GpuVendor[];
   preRecording?: PreRecording;
   recording?: Recording;
   alwaysOnBufferActive: boolean;
@@ -238,6 +242,7 @@ export interface GameIntegrations {
   valorant: GameIntegrationSettings;
   overwatch: GameIntegrationSettings;
   fortnite: GameIntegrationSettings;
+  theFinals: GameIntegrationSettings;
 }
 
 export type ClipEncoder = 'gpu' | 'cpu';
@@ -254,18 +259,7 @@ export type CpuClipPreset =
   | 'slow'
   | 'slower'
   | 'veryslow';
-export type NvidiaClipPreset =
-  | 'slow'
-  | 'medium'
-  | 'fast'
-  | 'hp'
-  | 'hq'
-  | 'bd'
-  | 'll'
-  | 'llhq'
-  | 'llhp'
-  | 'lossless'
-  | 'losslesshp';
+export type NvidiaClipPreset = 'slow' | 'medium' | 'fast';
 export type Av1NvencPreset = 'p1' | 'p2' | 'p3' | 'p4' | 'p5' | 'p6' | 'p7';
 export type AmdClipPreset = 'quality' | 'transcoding' | 'lowlatency' | 'ultralowlatency';
 export type IntelClipPreset = 'fast' | 'medium' | 'slow';
@@ -309,6 +303,7 @@ export interface Settings {
   frameRate: number;
   stretch4By3: boolean;
   enableHdr: boolean; // When false, recordings are always SDR even on an HDR display
+  gpuPriority: GpuPriority;
   rateControl: string;
   crfValue: number;
   cqLevel: number;
@@ -318,6 +313,7 @@ export interface Settings {
   encoder: 'gpu' | 'cpu';
   codec: Codec | null;
   storageLimit: number;
+  unlimitedStorage: boolean; // Never deletes old recordings to stay under storageLimit
   contentFolder: string;
   cacheFolder: string;
   inputDevices: DeviceSetting[];
@@ -362,6 +358,7 @@ export interface Settings {
   showNewBadgeOnVideos: boolean;
   showGameBackground: boolean; // Show game background while recording
   showAudioWaveformInTimeline: boolean; // Show audio waveform in video timeline
+  showBookmarksInFullscreen: boolean;
   enableSeparateAudioTracks: boolean; // Advanced: per-source audio tracks
   audioOutputMode: AudioOutputMode;
   videoQualityPreset: VideoQualityPreset;
@@ -375,6 +372,7 @@ export interface Settings {
 
 export const initialState: State = {
   gpuVendor: GpuVendor.Unknown,
+  integratedGpuVendors: [],
   recording: undefined,
   alwaysOnBufferActive: false,
   isFinishingRecording: false,
@@ -403,6 +401,7 @@ export const initialSettings: Settings = {
   frameRate: 30,
   stretch4By3: true,
   enableHdr: true,
+  gpuPriority: 'Realtime',
   rateControl: 'VBR',
   crfValue: 23,
   cqLevel: 20,
@@ -412,6 +411,7 @@ export const initialSettings: Settings = {
   encoder: 'gpu',
   codec: null,
   storageLimit: 100,
+  unlimitedStorage: false,
   contentFolder: '',
   cacheFolder: '',
   inputDevices: [],
@@ -452,6 +452,7 @@ export const initialSettings: Settings = {
   showNewBadgeOnVideos: false,
   showGameBackground: true,
   showAudioWaveformInTimeline: true,
+  showBookmarksInFullscreen: true,
   enableSeparateAudioTracks: false,
   audioOutputMode: 'All',
   videoQualityPreset: 'high',
@@ -487,6 +488,7 @@ export const initialSettings: Settings = {
     valorant: { enabled: true },
     overwatch: { enabled: true },
     fortnite: { enabled: true },
+    theFinals: { enabled: true },
   },
 };
 
@@ -513,12 +515,14 @@ export interface SegmentCardProps {
   moveCard: (dragIndex: number, hoverIndex: number) => void;
   formatTime: (time: number) => string;
   isHovered: boolean;
-  setHoveredSegmentId: (id: number | null) => void;
+  segmentHover: HoverIntentHandlers<number>;
   removeSegment: (id: number) => void;
   audioTrackNames?: string[];
   audioTrackTypes?: AudioTrackType[];
-  onMutedAudioTracksChange?: (id: number, mutedTracks: number[]) => void;
-  onAudioTrackVolumesChange?: (id: number, volumes: Record<number, number>) => void;
+  onAudioMixChange?: (
+    id: number,
+    mix: Pick<Segment, 'mutedAudioTracks' | 'audioTrackVolumes'>,
+  ) => void;
 }
 
 export interface AiProgress {
@@ -532,6 +536,11 @@ export interface AiProgress {
 export interface MigrationStatus {
   isRunning: boolean;
   currentMigration: string | null;
+  step: number;
+  stepCount: number;
+  progress: number | null;
+  progressTotal: number | null;
+  progressUnit: string | null;
 }
 
 export interface GameResponse {

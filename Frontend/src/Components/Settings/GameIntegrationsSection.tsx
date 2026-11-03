@@ -66,6 +66,12 @@ const GAME_INTEGRATIONS: GameIntegration[] = [
     betaNote: 'Kills and assists only work with color\u00a0blind mode off.',
   },
   {
+    id: 'the-finals',
+    name: 'THE FINALS',
+    settingsKey: 'theFinals',
+    backgroundImage: 'https://segra.tv/api/games/cover/cod6ev',
+  },
+  {
     id: 'gta',
     name: 'Grand Theft Auto',
     settingsKey: 'gta',
@@ -139,6 +145,7 @@ const GAME_INTEGRATIONS: GameIntegration[] = [
     backgroundImage: 'https://segra.tv/api/games/cover/ar3en0',
   },
 ];
+GAME_INTEGRATIONS.sort((a, b) => a.name.localeCompare(b.name));
 
 interface GameIntegrationCardProps {
   integration: GameIntegration;
@@ -244,7 +251,7 @@ export default function GameIntegrationsSection() {
             key={integration.id}
             integration={integration}
             enabled={settings.gameIntegrations[integration.settingsKey].enabled}
-            showBackground={settings.showGameBackground}
+            showBackground={settings.showGameBackground && !settings.airplaneMode}
             onToggle={(enabled) => handleToggle(integration.settingsKey, enabled)}
           />
         ))}

@@ -1,19 +1,34 @@
-import { createContext, useContext, ReactNode, useState, useEffect } from 'react';
+import {
+  createContext,
+  useContext,
+  ReactNode,
+  useState,
+  useEffect,
+  useMemo,
+  useCallback,
+} from 'react';
+import { sendMessageToBackend } from '../Utils/MessageUtils';
 
 export interface ContentMigrationProgress {
   id: string;
   fileName: string;
   progress: number;
-  status: 'migrating' | 'done' | 'error';
+  status: 'migrating' | 'done' | 'error' | 'cancelled';
   totalFiles: number;
   currentFileIndex: number;
+  pendingContentIds: string[];
   message?: string;
 }
 
 interface ContentMigrationContextType {
   migrations: Record<string, ContentMigrationProgress>;
   isMigrating: boolean;
+  // Content still to be moved: 'moving' for the file in progress, 'waiting' for the rest
+  getContentMigrationStatus: (contentId: string) => ContentMigrationStatus | null;
+  cancelMigration: () => void;
 }
+
+export type ContentMigrationStatus = 'moving' | 'waiting';
 
 const ContentMigrationContext = createContext<ContentMigrationContextType | undefined>(undefined);
 
@@ -26,12 +41,17 @@ export function ContentMigrationProvider({ children }: { children: ReactNode }) 
 
       if (data.method === 'ContentMigrationProgress') {
         const migration = data.content as ContentMigrationProgress;
+        // The backend only sends the pending list when it changes, so keep the last one
         setMigrations((prev) => ({
           ...prev,
-          [migration.id]: migration,
+          [migration.id]: {
+            ...migration,
+            pendingContentIds:
+              migration.pendingContentIds ?? prev[migration.id]?.pendingContentIds ?? [],
+          },
         }));
 
-        if (migration.status === 'done' || migration.status === 'error') {
+        if (migration.status !== 'migrating') {
           setTimeout(() => {
             setMigrations((prev) => {
               const next = { ...prev };
@@ -51,9 +71,28 @@ export function ContentMigrationProvider({ children }: { children: ReactNode }) 
   }, []);
 
   const isMigrating = Object.values(migrations).some((m) => m.status === 'migrating');
+  // The backend lists pending content in move order, so the first id is the one being moved
+  const contentStatuses = useMemo(() => {
+    const statuses = new Map<string, ContentMigrationStatus>();
+    for (const m of Object.values(migrations)) {
+      if (m.status !== 'migrating') continue;
+      (m.pendingContentIds ?? []).forEach((id, i) =>
+        statuses.set(id, i === 0 ? 'moving' : 'waiting'),
+      );
+    }
+    return statuses;
+  }, [migrations]);
+  const getContentMigrationStatus = useCallback(
+    (contentId: string) => contentStatuses.get(contentId) ?? null,
+    [contentStatuses],
+  );
+
+  const cancelMigration = useCallback(() => sendMessageToBackend('CancelContentMigration'), []);
 
   return (
-    <ContentMigrationContext.Provider value={{ migrations, isMigrating }}>
+    <ContentMigrationContext.Provider
+      value={{ migrations, isMigrating, getContentMigrationStatus, cancelMigration }}
+    >
       {children}
     </ContentMigrationContext.Provider>
   );
