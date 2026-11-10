@@ -593,6 +593,12 @@ namespace Segra.Backend.Core
                     current.TheFinals.Enabled = updated.TheFinals.Enabled;
                     hasChanges = true;
                 }
+                if (current.ModernWarfare4.Enabled != updated.ModernWarfare4.Enabled)
+                {
+                    Log.Information($"GameIntegrations.ModernWarfare4.Enabled changed from '{current.ModernWarfare4.Enabled}' to '{updated.ModernWarfare4.Enabled}'");
+                    current.ModernWarfare4.Enabled = updated.ModernWarfare4.Enabled;
+                    hasChanges = true;
+                }
             }
 
             if (updatedSettings.Games != null)
@@ -805,6 +811,13 @@ namespace Segra.Backend.Core
                 hasChanges = true;
             }
 
+            if (settings.ExcludeClipsFromStorageLimit != updatedSettings.ExcludeClipsFromStorageLimit)
+            {
+                Log.Information($"ExcludeClipsFromStorageLimit changed from '{settings.ExcludeClipsFromStorageLimit}' to '{updatedSettings.ExcludeClipsFromStorageLimit}'");
+                settings.ExcludeClipsFromStorageLimit = updatedSettings.ExcludeClipsFromStorageLimit;
+                hasChanges = true;
+            }
+
             if (!settings.InputDevices.SequenceEqual(updatedSettings.InputDevices, new DeviceSettingEqualityComparer()))
             {
                 static string Describe(DeviceSetting d) => $"{d.Name} (noiseSuppression={d.NoiseSuppression}, forceMono={d.ForceMono})";
@@ -891,13 +904,6 @@ namespace Segra.Backend.Core
                 hasChanges = true;
                 _ = Task.Run(() => UpdateService.UpdateAppIfNecessary(forceCheck: true));
                 _ = Task.Run(() => UpdateService.GetReleaseNotes(forceCheck: true));
-            }
-
-            if (settings.AutoInstallUpdates != updatedSettings.AutoInstallUpdates)
-            {
-                Log.Information($"AutoInstallUpdates changed from '{settings.AutoInstallUpdates}' to '{updatedSettings.AutoInstallUpdates}'");
-                settings.AutoInstallUpdates = updatedSettings.AutoInstallUpdates;
-                hasChanges = true;
             }
 
             if (settings.RunOnStartup != updatedSettings.RunOnStartup)
