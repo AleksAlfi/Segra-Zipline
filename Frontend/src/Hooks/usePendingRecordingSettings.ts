@@ -21,8 +21,15 @@ export const RECORDING_SETTING_GROUPS = {
     'replayBufferDuration',
     'replayBufferMaxSize',
   ],
-  audio: ['inputDevices', 'outputDevices', 'enableSeparateAudioTracks', 'audioOutputMode'],
+  audio: [
+    'inputDevices',
+    'outputDevices',
+    'enableSeparateAudioTracks',
+    'audioOutputMode',
+    'applicationAudioCaptures',
+  ],
   gameIntegrations: ['gameIntegrations'],
+  webcam: ['webcamEnabled', 'webcamDeviceId'],
 } satisfies Record<string, (keyof Settings)[]>;
 
 const ALL_RECORDING_SETTINGS = Object.values(RECORDING_SETTING_GROUPS).flat();

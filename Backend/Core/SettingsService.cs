@@ -431,6 +431,27 @@ namespace Segra.Backend.Core
                 hasChanges = true;
             }
 
+            if (settings.ShowVideoNavigation != updatedSettings.ShowVideoNavigation)
+            {
+                Log.Information($"ShowVideoNavigation changed from '{settings.ShowVideoNavigation}' to '{updatedSettings.ShowVideoNavigation}'");
+                settings.ShowVideoNavigation = updatedSettings.ShowVideoNavigation;
+                hasChanges = true;
+            }
+
+            if (settings.ShowClipToolsOnClips != updatedSettings.ShowClipToolsOnClips)
+            {
+                Log.Information($"ShowClipToolsOnClips changed from '{settings.ShowClipToolsOnClips}' to '{updatedSettings.ShowClipToolsOnClips}'");
+                settings.ShowClipToolsOnClips = updatedSettings.ShowClipToolsOnClips;
+                hasChanges = true;
+            }
+
+            if (settings.ShowLiveSessionCard != updatedSettings.ShowLiveSessionCard)
+            {
+                Log.Information($"ShowLiveSessionCard changed from '{settings.ShowLiveSessionCard}' to '{updatedSettings.ShowLiveSessionCard}'");
+                settings.ShowLiveSessionCard = updatedSettings.ShowLiveSessionCard;
+                hasChanges = true;
+            }
+
             if (settings.EnableSeparateAudioTracks != updatedSettings.EnableSeparateAudioTracks)
             {
                 Log.Information($"EnableSeparateAudioTracks changed from '{settings.EnableSeparateAudioTracks}' to '{updatedSettings.EnableSeparateAudioTracks}'");
@@ -442,6 +463,42 @@ namespace Segra.Backend.Core
             {
                 Log.Information($"AudioOutputMode changed from '{settings.AudioOutputMode}' to '{updatedSettings.AudioOutputMode}'");
                 settings.AudioOutputMode = updatedSettings.AudioOutputMode;
+                hasChanges = true;
+            }
+
+            if (!settings.ApplicationAudioCaptures.SequenceEqual(updatedSettings.ApplicationAudioCaptures))
+            {
+                Log.Information($"ApplicationAudioCaptures changed from '[{string.Join(", ", settings.ApplicationAudioCaptures.Select(a => a.Exe))}]' to '[{string.Join(", ", updatedSettings.ApplicationAudioCaptures.Select(a => a.Exe))}]'");
+                settings.ApplicationAudioCaptures = updatedSettings.ApplicationAudioCaptures;
+                hasChanges = true;
+            }
+
+            if (settings.WebcamEnabled != updatedSettings.WebcamEnabled)
+            {
+                Log.Information($"WebcamEnabled changed from '{settings.WebcamEnabled}' to '{updatedSettings.WebcamEnabled}'");
+                settings.WebcamEnabled = updatedSettings.WebcamEnabled;
+                hasChanges = true;
+            }
+
+            if (settings.WebcamDeviceId != updatedSettings.WebcamDeviceId)
+            {
+                Log.Information($"WebcamDeviceId changed from '{settings.WebcamDeviceId}' to '{updatedSettings.WebcamDeviceId}'");
+                settings.WebcamDeviceId = updatedSettings.WebcamDeviceId;
+                hasChanges = true;
+            }
+
+            if (settings.WebcamX != updatedSettings.WebcamX || settings.WebcamY != updatedSettings.WebcamY)
+            {
+                Log.Information($"Webcam position changed from '{settings.WebcamX}, {settings.WebcamY}' to '{updatedSettings.WebcamX}, {updatedSettings.WebcamY}'");
+                settings.WebcamX = updatedSettings.WebcamX;
+                settings.WebcamY = updatedSettings.WebcamY;
+                hasChanges = true;
+            }
+
+            if (settings.WebcamSize != updatedSettings.WebcamSize)
+            {
+                Log.Information($"WebcamSize changed from '{settings.WebcamSize}' to '{updatedSettings.WebcamSize}'");
+                settings.WebcamSize = updatedSettings.WebcamSize;
                 hasChanges = true;
             }
 
@@ -686,6 +743,13 @@ namespace Segra.Backend.Core
                 hasChanges = true;
             }
 
+            if (settings.ClearReplayBufferAfterSave != updatedSettings.ClearReplayBufferAfterSave)
+            {
+                Log.Information($"ClearReplayBufferAfterSave changed from '{settings.ClearReplayBufferAfterSave}' to '{updatedSettings.ClearReplayBufferAfterSave}'");
+                settings.ClearReplayBufferAfterSave = updatedSettings.ClearReplayBufferAfterSave;
+                hasChanges = true;
+            }
+
             if (settings.Resolution != updatedSettings.Resolution)
             {
                 Log.Information($"Resolution changed from '{settings.Resolution}' to '{updatedSettings.Resolution}'");
@@ -751,6 +815,7 @@ namespace Segra.Backend.Core
             {
                 Log.Information($"Encoder changed from '{settings.Encoder}' to '{updatedSettings.Encoder}'");
                 settings.Encoder = updatedSettings.Encoder;
+                settings.UnavailableCodec = null;
 
                 // When encoder changes, automatically select an appropriate codec
                 var newCodec = OBSService.SelectDefaultCodec(settings.Encoder, AppState.Instance.Codecs);
@@ -793,6 +858,7 @@ namespace Segra.Backend.Core
                 {
                     Log.Information($"Codec changed from '{settings.Codec.FriendlyName}' to '{updatedSettings.Codec.FriendlyName}'");
                     settings.Codec = updatedSettings.Codec;
+                    settings.UnavailableCodec = null;
                     hasChanges = true;
                 }
             }
@@ -816,6 +882,42 @@ namespace Segra.Backend.Core
                 Log.Information($"ExcludeClipsFromStorageLimit changed from '{settings.ExcludeClipsFromStorageLimit}' to '{updatedSettings.ExcludeClipsFromStorageLimit}'");
                 settings.ExcludeClipsFromStorageLimit = updatedSettings.ExcludeClipsFromStorageLimit;
                 hasChanges = true;
+            }
+
+            bool autoDeleteChanged = false;
+            if (settings.AutoDeleteOldContent != updatedSettings.AutoDeleteOldContent)
+            {
+                Log.Information($"AutoDeleteOldContent changed from '{settings.AutoDeleteOldContent}' to '{updatedSettings.AutoDeleteOldContent}'");
+                settings.AutoDeleteOldContent = updatedSettings.AutoDeleteOldContent;
+                autoDeleteChanged = true;
+            }
+
+            if (settings.AutoDeleteAfterDays != updatedSettings.AutoDeleteAfterDays)
+            {
+                Log.Information($"AutoDeleteAfterDays changed from '{settings.AutoDeleteAfterDays}' to '{updatedSettings.AutoDeleteAfterDays}'");
+                settings.AutoDeleteAfterDays = Math.Max(1, updatedSettings.AutoDeleteAfterDays);
+                autoDeleteChanged = true;
+            }
+
+            if (settings.AutoDeleteClipsAndHighlights != updatedSettings.AutoDeleteClipsAndHighlights)
+            {
+                Log.Information($"AutoDeleteClipsAndHighlights changed from '{settings.AutoDeleteClipsAndHighlights}' to '{updatedSettings.AutoDeleteClipsAndHighlights}'");
+                settings.AutoDeleteClipsAndHighlights = updatedSettings.AutoDeleteClipsAndHighlights;
+                autoDeleteChanged = true;
+            }
+
+            if (autoDeleteChanged)
+            {
+                hasChanges = true;
+                _ = Task.Run(StorageService.DeleteExpiredContent);
+            }
+
+            if (settings.GameSubfolders != updatedSettings.GameSubfolders)
+            {
+                Log.Information($"GameSubfolders changed from '{settings.GameSubfolders}' to '{updatedSettings.GameSubfolders}'");
+                settings.GameSubfolders = updatedSettings.GameSubfolders;
+                hasChanges = true;
+                _ = Task.Run(ContentService.ApplyGameSubfoldersAsync);
             }
 
             if (!settings.InputDevices.SequenceEqual(updatedSettings.InputDevices, new DeviceSettingEqualityComparer()))

@@ -30,6 +30,17 @@ export interface Content {
   compressed: boolean;
   audioTrackNames?: string[];
   audioTrackTypes?: AudioTrackType[];
+  webcam?: WebcamLayer;
+}
+
+// A webcam recorded next to the video, drawn on top of it in the editor and in clips
+export interface WebcamLayer {
+  filePath: string;
+  offset: number; // Seconds into the video where the webcam video starts
+  x: number; // Top-left in percent of the video
+  y: number;
+  size: number; // Percent of the video width, 16:9 box
+  hidden: boolean;
 }
 
 export interface OBSVersion {
@@ -58,6 +69,7 @@ export interface State {
   inputDevices: AudioDevice[];
   outputDevices: AudioDevice[];
   displays: Display[];
+  webcams: Webcam[];
   codecs: Codec[];
   availableOBSVersions: OBSVersion[];
   isCheckingForUpdates: boolean;
@@ -121,6 +133,7 @@ export interface Recording {
   startTime: Date;
   endTime: Date;
   game: string;
+  filePath?: string;
   isUsingGameHook: boolean;
   isUsingWindowCapture: boolean;
   coverImageId?: string;
@@ -148,6 +161,11 @@ export interface DeviceSetting {
   forceMono?: boolean;
 }
 
+export interface Webcam {
+  name: string;
+  deviceId: string;
+}
+
 export interface Display {
   deviceId: string;
   deviceName: string;
@@ -173,6 +191,7 @@ export interface GameListEntry {
   executables: string[];
   icon?: string; // CDN icon id (https://segra.tv/api/games/icon/{icon})
   igdbId?: number;
+  coverImageId?: string; // CDN cover id (https://segra.tv/api/games/cover/{coverImageId})
 }
 
 // Per-game recording quality override. When preset is a named preset (low/standard/high) the
@@ -206,7 +225,7 @@ export interface GameSetting {
   igdbId: number | null; // catalog link; keeps name/icon in sync on startup
   icon?: string; // CDN icon id resolved from the catalog (known games)
   customIcon: string | null; // base64 PNG extracted from the exe (custom games)
-  record: boolean;
+  record: boolean | null; // null follows autoRecordGames
   qualityOverride: GameQualityOverride | null;
   recordingModeOverride: GameRecordingModeOverride | null;
   discardSessionsWithoutBookmarksOverride: boolean | null;
@@ -299,6 +318,19 @@ export const menuItemHasContent = (id: MenuItemId, content: Content[]): boolean 
   return content.some((c) => types.includes(c.type));
 };
 
+export interface AppAudioCapture {
+  exe: string;
+  name: string;
+  path?: string;
+}
+
+export interface RunningApp {
+  exe: string;
+  name: string;
+  path: string;
+  icon: string | null; // PNG data URL
+}
+
 export interface Settings {
   resolution: '720p' | '1080p' | '1440p' | '4K';
   frameRate: number;
@@ -316,6 +348,10 @@ export interface Settings {
   storageLimit: number;
   unlimitedStorage: boolean; // Never deletes old recordings to stay under storageLimit
   excludeClipsFromStorageLimit: boolean;
+  autoDeleteOldContent: boolean;
+  autoDeleteAfterDays: number;
+  autoDeleteClipsAndHighlights: boolean;
+  gameSubfolders: boolean;
   contentFolder: string;
   cacheFolder: string;
   inputDevices: DeviceSetting[];
@@ -335,6 +371,7 @@ export interface Settings {
   replayBufferDuration: number; // in seconds
   replayBufferMaxSize: number; // in MB
   alwaysOnReplayBuffer: boolean; // Keep a display replay buffer running while nothing records
+  clearReplayBufferAfterSave: boolean; // Restart the buffer after a save so saves never overlap
   highlightPaddingBefore: number; // Seconds before a highlight moment
   highlightPaddingAfter: number; // Seconds after a highlight moment
   clipClearSegmentsAfterCreatingClip: boolean;
@@ -360,8 +397,17 @@ export interface Settings {
   showGameBackground: boolean; // Show game background while recording
   showAudioWaveformInTimeline: boolean; // Show audio waveform in video timeline
   showBookmarksInFullscreen: boolean;
+  showVideoNavigation: boolean;
+  showClipToolsOnClips: boolean;
+  showLiveSessionCard: boolean;
   enableSeparateAudioTracks: boolean; // Advanced: per-source audio tracks
   audioOutputMode: AudioOutputMode;
+  applicationAudioCaptures: AppAudioCapture[]; // Apps captured as separate app audio
+  webcamEnabled: boolean;
+  webcamDeviceId: string | null;
+  webcamX: number; // Top-left of the overlay in percent of the canvas
+  webcamY: number;
+  webcamSize: number; // Percent of the canvas width
   videoQualityPreset: VideoQualityPreset;
   clipQualityPreset: ClipQualityPreset;
   confirmBeforeDeleting: boolean;
@@ -382,6 +428,7 @@ export const initialState: State = {
   inputDevices: [],
   outputDevices: [],
   displays: [],
+  webcams: [],
   codecs: [],
   availableOBSVersions: [],
   isCheckingForUpdates: false,
@@ -414,6 +461,10 @@ export const initialSettings: Settings = {
   storageLimit: 100,
   unlimitedStorage: false,
   excludeClipsFromStorageLimit: false,
+  autoDeleteOldContent: false,
+  autoDeleteAfterDays: 180,
+  autoDeleteClipsAndHighlights: false,
+  gameSubfolders: true,
   contentFolder: '',
   cacheFolder: '',
   inputDevices: [],
@@ -433,6 +484,7 @@ export const initialSettings: Settings = {
   replayBufferDuration: 30,
   replayBufferMaxSize: 1000,
   alwaysOnReplayBuffer: false,
+  clearReplayBufferAfterSave: true,
   highlightPaddingBefore: 4,
   highlightPaddingAfter: 4,
   clipClearSegmentsAfterCreatingClip: false,
@@ -454,8 +506,17 @@ export const initialSettings: Settings = {
   showGameBackground: true,
   showAudioWaveformInTimeline: true,
   showBookmarksInFullscreen: true,
+  showVideoNavigation: true,
+  showClipToolsOnClips: false,
+  showLiveSessionCard: true,
   enableSeparateAudioTracks: false,
   audioOutputMode: 'All',
+  applicationAudioCaptures: [],
+  webcamEnabled: false,
+  webcamDeviceId: null,
+  webcamX: 80,
+  webcamY: 80,
+  webcamSize: 20,
   videoQualityPreset: 'high',
   clipQualityPreset: 'standard',
   confirmBeforeDeleting: false,
