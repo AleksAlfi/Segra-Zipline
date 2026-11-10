@@ -243,6 +243,7 @@ export interface GameIntegrations {
   overwatch: GameIntegrationSettings;
   fortnite: GameIntegrationSettings;
   theFinals: GameIntegrationSettings;
+  modernWarfare4: GameIntegrationSettings;
 }
 
 export type ClipEncoder = 'gpu' | 'cpu';
@@ -314,6 +315,7 @@ export interface Settings {
   codec: Codec | null;
   storageLimit: number;
   unlimitedStorage: boolean; // Never deletes old recordings to stay under storageLimit
+  excludeClipsFromStorageLimit: boolean;
   contentFolder: string;
   cacheFolder: string;
   inputDevices: DeviceSetting[];
@@ -328,7 +330,6 @@ export interface Settings {
   startupWindowMode: StartupWindowMode; // Window state when launched from startup
   closeButtonAction: CloseButtonAction;
   receiveBetaUpdates: boolean;
-  autoInstallUpdates: boolean; // Install a downloaded update once nothing records and the window is closed
   airplaneMode: boolean; // Hides cloud account/login/upload features and signs the user out
   recordingMode: RecordingMode;
   replayBufferDuration: number; // in seconds
@@ -412,6 +413,7 @@ export const initialSettings: Settings = {
   codec: null,
   storageLimit: 100,
   unlimitedStorage: false,
+  excludeClipsFromStorageLimit: false,
   contentFolder: '',
   cacheFolder: '',
   inputDevices: [],
@@ -426,7 +428,6 @@ export const initialSettings: Settings = {
   startupWindowMode: 'Minimized',
   closeButtonAction: 'Minimize',
   receiveBetaUpdates: false,
-  autoInstallUpdates: true,
   airplaneMode: false,
   recordingMode: 'Hybrid',
   replayBufferDuration: 30,
@@ -489,6 +490,7 @@ export const initialSettings: Settings = {
     overwatch: { enabled: true },
     fortnite: { enabled: true },
     theFinals: { enabled: true },
+    modernWarfare4: { enabled: true },
   },
 };
 

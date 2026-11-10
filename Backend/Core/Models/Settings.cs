@@ -61,6 +61,7 @@ namespace Segra.Backend.Core.Models
         private bool _pendingOBSUpdate = false;
         private int _storageLimit = 100;
         private bool _unlimitedStorage = false;
+        private bool _excludeClipsFromStorageLimit = false;
         private List<DeviceSetting> _inputDevices = new List<DeviceSetting>();
         private List<DeviceSetting> _outputDevices = new List<DeviceSetting>();
         private Display? _selectedDisplay = null;
@@ -74,7 +75,6 @@ namespace Segra.Backend.Core.Models
         // Linux has no tray, so closing to it left the app running with no visible way to quit
         private CloseButtonAction _closeButtonAction = OperatingSystem.IsWindows() ? CloseButtonAction.Minimize : CloseButtonAction.Exit;
         private bool _receiveBetaUpdates = false;
-        private bool _autoInstallUpdates = true;
         private bool _airplaneMode = false;
         private RecordingMode _recordingMode = RecordingMode.Hybrid;
         private int _replayBufferDuration = 30;
@@ -371,6 +371,16 @@ namespace Segra.Backend.Core.Models
             }
         }
 
+        [JsonPropertyName("excludeClipsFromStorageLimit")]
+        public bool ExcludeClipsFromStorageLimit
+        {
+            get => _excludeClipsFromStorageLimit;
+            set
+            {
+                _excludeClipsFromStorageLimit = value;
+            }
+        }
+
         [JsonPropertyName("inputDevices")]
         public List<DeviceSetting> InputDevices
         {
@@ -524,19 +534,6 @@ namespace Segra.Backend.Core.Models
                 if (_receiveBetaUpdates != value)
                 {
                     _receiveBetaUpdates = value;
-                }
-            }
-        }
-
-        [JsonPropertyName("autoInstallUpdates")]
-        public bool AutoInstallUpdates
-        {
-            get => _autoInstallUpdates;
-            set
-            {
-                if (_autoInstallUpdates != value)
-                {
-                    _autoInstallUpdates = value;
                 }
             }
         }
@@ -1710,5 +1707,8 @@ namespace Segra.Backend.Core.Models
 
         [JsonPropertyName("theFinals")]
         public GameIntegrationSettings TheFinals { get; set; } = new GameIntegrationSettings(true);
+
+        [JsonPropertyName("modernWarfare4")]
+        public GameIntegrationSettings ModernWarfare4 { get; set; } = new GameIntegrationSettings(true);
     }
 }
