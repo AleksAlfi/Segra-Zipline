@@ -198,7 +198,7 @@
 
   <Target Name="IncludeFrontendAssets" BeforeTargets="_CalculateEmbeddedFilesManifestInputs" DependsOnTargets="BuildFrontendAssets">
     <ItemGroup>
-      <EmbeddedResource Include="Resources\wwwroot\**\*" />
+      <EmbeddedResource Include="Resources\wwwroot\**\*" WithCulture="false" />
     </ItemGroup>
   </Target>
 

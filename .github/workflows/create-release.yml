@@ -116,6 +116,26 @@ jobs:
         run: dotnet publish HotkeyBroker/Segra.Hotkeys/Segra.Hotkeys.csproj -c Release -f net10.0-windows10.0.19041.0 -r win-x64 -o publish --no-restore
         shell: pwsh
 
+      - name: UI smoke test
+        shell: pwsh
+        timeout-minutes: 5
+        run: |
+          node ./.github/scripts/smoke-test-ui.mjs ./publish/Segra.exe ./smoke-test.png
+          $code = $LASTEXITCODE
+          Copy-Item "$env:APPDATA/Segra/logs.log" ./segra.log -ErrorAction SilentlyContinue
+          exit $code
+
+      - name: Upload UI smoke test results
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: ui-smoke-test
+          path: |
+            ./smoke-test.png
+            ./segra.log
+          if-no-files-found: ignore
+          retention-days: 7
+
       - name: Upload Segra binaries for signing (Pass 1)
         id: upload_unsigned_exe
         uses: actions/upload-artifact@v7
